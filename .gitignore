@@ -2,3 +2,5 @@
 .idea/
 
 UHM_models
+
+__pycache__/

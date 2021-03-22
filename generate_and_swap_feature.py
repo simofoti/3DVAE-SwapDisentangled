@@ -6,11 +6,10 @@ import tqdm
 import trimesh
 import trimesh.visual
 import trimesh.creation
-import networkx as nx
 import numpy as np
 import pyrender
 
-from collections import Counter
+import utils
 
 
 class GenerateSwapFeature:
@@ -28,79 +27,17 @@ class GenerateSwapFeature:
         self._mu = uhm_dict['Mean']
         self._eigenvectors = uhm_dict['Eigenvectors']
         self._eigenvalues = uhm_dict['EigenValues']
-        self._feature_idx, self._contour_idx = \
-            self.extract_feature_and_contour_from_colour()
+
+        colored = trimesh.load(os.path.join(self.model_dir, self.template_name),
+                               process=False)
+        features = utils.extract_feature_and_contour_from_colour(colored)
+        key = list(features.keys())[11]
+        self._feature_idx = features[key]['feature']
+        self._contour_idx = features[key]['contour']
 
     @property
     def faces(self):
         return self._faces
-
-    def extract_feature_and_contour_from_colour(self):
-        # assuming that the feature is colored in red and its contour in black
-        colored = trimesh.load(os.path.join(self.model_dir, self.template_name),
-                               process=False)
-        colors = colored.visual.vertex_colors
-        graph = nx.from_edgelist(colored.edges_unique)
-        one_rings_indices = [list(graph[i].keys()) for i in range(len(colors))]
-
-        features = {}
-        for index, (v_col, i_ring) in enumerate(zip(colors, one_rings_indices)):
-            if str(v_col) not in features:
-                features[str(v_col)] = {'feature': [], 'contour': []}
-
-            if self.is_contour(colors, index, i_ring):
-                features[str(v_col)]['contour'].append(index)
-            else:
-                features[str(v_col)]['feature'].append(index)
-
-        # certain vertices on the contour have interpolated colours assign them
-        # to adjacent region
-        elem_to_remove = []
-        for key, feat in features.items():
-            if len(feat['feature']) < 5:
-                elem_to_remove.append(key)
-                for idx in feat['feature']:
-                    # colored.visual.vertex_colors[idx] = [0, 0, 0, 255]
-                    counts = Counter([str(colors[ri])
-                                      for ri in one_rings_indices[idx]])
-                    most_common = counts.most_common(1)[0][0]
-                    features[most_common]['feature'].append(idx)
-                    features[most_common]['contour'].append(idx)
-        for e in elem_to_remove:
-            features.pop(e, None)
-
-        # nose = [237 26 77 255]
-        # 0=eyes, 1=ears, 2=sides, 3=neck, 4=back, 5=mouth, 6=forehead,
-        # 7=cheeks 8=cheekbones, 9=jaw, 10=moustache, 11=nose, 12=chin
-
-        # with b map
-        # 0=eyes, 1=ears, 2=sides, 3=neck, 4=back, 5=mouth, 6=forehead,
-        # 7=cheeks 8=cheekbones, 9=forehead, 10=jaw, 11=nose
-        key = list(features.keys())[11]
-        feature_idx = features[key]['feature']
-        contour_idx = features[key]['contour']
-
-        # find surroundings
-        # all_distances = self.compute_minimum_distances(
-        #     colored.vertices, colored.vertices[contour_idx]
-        # )
-        # max_distance = max(all_distances)
-        # all_distances[feature_idx] = max_distance
-        # all_distances[contour_idx] = max_distance
-        # threshold = 0.005
-        # surrounding_idx = np.squeeze(np.argwhere(all_distances < threshold))
-        # colored.visual.vertex_colors[surrounding_idx] = [0, 0, 0, 255]
-        # colored.show()
-        return feature_idx, contour_idx
-
-    @staticmethod
-    def is_contour(colors, center_index, ring_indices):
-        center_color = colors[center_index]
-        ring_colors = [colors[ri] for ri in ring_indices]
-        for r in ring_colors:
-            if not np.array_equal(center_color, r):
-                return True
-        return False
 
     def save_feature_indices(self, filename):
         feature_idx_list = self._feature_idx[0].tolist()
