@@ -52,6 +52,10 @@ class MeshSimplifier:
 
         while verts_number > desired_verts_number:  # 0.0007076s vs 0.06s before
             top_elem_cost, top_elem_edge_index = heapq.heappop(h)
+
+            if edges[top_elem_edge_index][0] == edges[top_elem_edge_index][1]:
+                continue
+
             current_cost = self._edge_collapse_cost(
                 [edges[top_elem_edge_index][0], edges[top_elem_edge_index][1]])
             if current_cost['collapse_cost'] > top_elem_cost:
@@ -223,6 +227,6 @@ if __name__ == '__main__':
     #                          process=False)
     # mesh = mesh.simplify_quadratic_decimation(mesh.faces.shape[0] / 100)
     t = time.time()
-    simplifier = MeshSimplifier('UHM_models/mean_nme_fcolor_b.ply')
-    m, down, up = simplifier(math.ceil(simplifier.in_mesh.pos.shape[0] * 0.8))
+    simplifier = MeshSimplifier('UHM_models/mean_nme_fcolor_b.ply', debug=True)
+    m, down, up = simplifier(math.ceil(simplifier.in_mesh.pos.shape[0] * 0.01))
     print(time.time() - t)
