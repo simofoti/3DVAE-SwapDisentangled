@@ -8,6 +8,9 @@ import torch
 import torch_geometric.transforms
 from torch_geometric.data import Data
 
+import networkx as nx
+from collections import Counter
+
 import numpy as np
 import scipy.sparse as sp
 
@@ -23,8 +26,16 @@ class MeshSimplifier:
         self._debug = debug
         self._quadrics = self._vertex_quadrics()
 
-    def __call__(self, desired_verts_number=None):
-        sampled, down_mat = self.quadric_edge_collapse(desired_verts_number)
+    def __call__(self, desired_verts_number=None, local=False):
+        edges = self._in_mesh.edge_index.t()
+        edges = edges[edges[:, 0] < edges[:, 1]].numpy()
+
+        if local and hasattr(self._in_mesh, 'feat_and_cont'):
+            sampled, down_mat = self.local_quadric_edge_collapse(
+                edges, desired_verts_number)
+        else:
+            sampled, down_mat = self.quadric_edge_collapse(
+                edges, desired_verts_number)
         up_mat = self._get_upsampling_transformation(sampled)
         return sampled, down_mat, up_mat
 
@@ -36,10 +47,8 @@ class MeshSimplifier:
     def quadrics(self):
         return self._quadrics
 
-    def quadric_edge_collapse(self, desired_verts_number):
+    def quadric_edge_collapse(self, edges, desired_verts_number):
         # 24.27s vs 1167.70s before (sampling factor 0.8)
-        edges = self._in_mesh.edge_index.t()
-        edges = edges[edges[:, 0] < edges[:, 1]]
         h = []
         for e_idx, e in enumerate(edges):
             cost = self._edge_collapse_cost(e)
@@ -48,7 +57,6 @@ class MeshSimplifier:
 
         verts_number = self._in_mesh.pos.shape[0]
         faces = self._in_mesh.face.clone().numpy()
-        edges = edges.numpy()
 
         while verts_number > desired_verts_number:  # 0.0007076s vs 0.06s before
             top_elem_cost, top_elem_edge_index = heapq.heappop(h)
@@ -92,17 +100,79 @@ class MeshSimplifier:
         new_mesh = self._get_sampled_mesh(downsampling_matrix, new_faces)
         return new_mesh, downsampling_matrix
 
-    @staticmethod
-    def _load_mesh(mesh_path):
+    def local_quadric_edge_collapse(self, edges, desired_verts_number):
+        features = self._in_mesh.feat_and_cont
+        key = list(features.keys())[11]
+        feature_idx = features[key]['feature']
+
+        edges_of_region = []
+        for idx in feature_idx:
+            edges_of_region.extend(edges[np.argwhere(edges == idx)[0, :]])
+
+        edges = np.stack(edges_of_region)
+        return self.quadric_edge_collapse(edges, desired_verts_number)
+
+    def _load_mesh(self, mesh_path):
         mesh = trimesh.load_mesh(mesh_path, 'ply', process=False)
+        feat_and_cont = self.extract_feature_and_contour_from_colour(mesh)
         mesh_verts = torch.tensor(mesh.vertices, dtype=torch.float,
                                   requires_grad=False)
         face = torch.from_numpy(mesh.faces).t().to(torch.long).contiguous()
         mesh_colors = torch.tensor(mesh.visual.vertex_colors[:, :-1],
                                    dtype=torch.float, requires_grad=False)
-        data = Data(pos=mesh_verts, face=face, colors=mesh_colors)
+        data = Data(pos=mesh_verts, face=face, colors=mesh_colors,
+                    feat_and_cont=feat_and_cont)
         data = torch_geometric.transforms.FaceToEdge(False)(data)
         return data
+
+    def extract_feature_and_contour_from_colour(self, colored):
+        # assuming that the feature is colored in red and its contour in black
+        colors = colored.visual.vertex_colors
+        graph = nx.from_edgelist(colored.edges_unique)
+        one_rings_indices = [list(graph[i].keys()) for i in range(len(colors))]
+
+        features = {}
+        for index, (v_col, i_ring) in enumerate(zip(colors, one_rings_indices)):
+            if str(v_col) not in features:
+                features[str(v_col)] = {'feature': [], 'contour': []}
+
+            if self.is_contour(colors, index, i_ring):
+                features[str(v_col)]['contour'].append(index)
+            else:
+                features[str(v_col)]['feature'].append(index)
+
+        # certain vertices on the contour have interpolated colours assign them
+        # to adjacent region
+        elem_to_remove = []
+        for key, feat in features.items():
+            if len(feat['feature']) < 5:
+                elem_to_remove.append(key)
+                for idx in feat['feature']:
+                    # colored.visual.vertex_colors[idx] = [0, 0, 0, 255]
+                    counts = Counter([str(colors[ri])
+                                      for ri in one_rings_indices[idx]])
+                    most_common = counts.most_common(1)[0][0]
+                    features[most_common]['feature'].append(idx)
+                    features[most_common]['contour'].append(idx)
+        for e in elem_to_remove:
+            features.pop(e, None)
+
+        # with b map
+        # 0=eyes, 1=ears, 2=sides, 3=neck, 4=back, 5=mouth, 6=forehead,
+        # 7=cheeks 8=cheekbones, 9=forehead, 10=jaw, 11=nose
+        key = list(features.keys())[11]
+        feature_idx = features[key]['feature']
+        contour_idx = features[key]['contour']
+        return features
+
+    @staticmethod
+    def is_contour(colors, center_index, ring_indices):
+        center_color = colors[center_index]
+        ring_colors = [colors[ri] for ri in ring_indices]
+        for r in ring_colors:
+            if not np.array_equal(center_color, r):
+                return True
+        return False
 
     def _vertex_quadrics(self):  # 7.7s
         """Computes a quadric for each vertex in the Mesh.
@@ -228,5 +298,6 @@ if __name__ == '__main__':
     # mesh = mesh.simplify_quadratic_decimation(mesh.faces.shape[0] / 100)
     t = time.time()
     simplifier = MeshSimplifier('UHM_models/mean_nme_fcolor_b.ply', debug=True)
-    m, down, up = simplifier(math.ceil(simplifier.in_mesh.pos.shape[0] * 0.01))
+    m, down, up = simplifier(math.ceil(simplifier.in_mesh.pos.shape[0] * 0.93),
+                             local=True)
     print(time.time() - t)
