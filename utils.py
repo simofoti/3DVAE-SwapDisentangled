@@ -1,6 +1,25 @@
+import trimesh
+import torch
+import torch_geometric.transforms
+
 import networkx as nx
 import numpy as np
 from collections import Counter
+from torch_geometric.data import Data
+
+
+def load_template(mesh_path):
+    mesh = trimesh.load_mesh(mesh_path, 'ply', process=False)
+    feat_and_cont = extract_feature_and_contour_from_colour(mesh)
+    mesh_verts = torch.tensor(mesh.vertices, dtype=torch.float,
+                              requires_grad=False)
+    face = torch.from_numpy(mesh.faces).t().to(torch.long).contiguous()
+    mesh_colors = torch.tensor(mesh.visual.vertex_colors[:, :-1],
+                               dtype=torch.float, requires_grad=False)
+    data = Data(pos=mesh_verts, face=face, colors=mesh_colors,
+                feat_and_cont=feat_and_cont)
+    data = torch_geometric.transforms.FaceToEdge(False)(data)
+    return data
 
 
 def extract_feature_and_contour_from_colour(colored_trimesh):
@@ -19,14 +38,13 @@ def extract_feature_and_contour_from_colour(colored_trimesh):
         else:
             features[str(v_col)]['feature'].append(index)
 
-    # certain vertices on the contour have interpolated colours assign them
-    # to adjacent region
+    # certain vertices on the contour have interpolated colours ->
+    # assign them to adjacent region
     elem_to_remove = []
     for key, feat in features.items():
         if len(feat['feature']) < 5:
             elem_to_remove.append(key)
             for idx in feat['feature']:
-                # colored.visual.vertex_colors[idx] = [0, 0, 0, 255]
                 counts = Counter([str(colors[ri])
                                   for ri in one_rings_indices[idx]])
                 most_common = counts.most_common(1)[0][0]

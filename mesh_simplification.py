@@ -4,7 +4,7 @@ import time
 import trimesh
 import trimesh.proximity
 import torch
-import torch_geometric.transforms
+import torch_geometric
 from torch_geometric.data import Data
 
 import numpy as np
@@ -16,7 +16,7 @@ import utils
 class MeshSimplifier:
     def __init__(self, in_mesh_path=None, in_mesh=None, debug=False):
         if in_mesh_path:
-            self._in_mesh = self._load_mesh(in_mesh_path)
+            self._in_mesh = utils.load_template(in_mesh_path)
         elif in_mesh:
             self._in_mesh = in_mesh
         else:
@@ -109,20 +109,6 @@ class MeshSimplifier:
 
         edges = np.stack(edges_of_region)
         return self.quadric_edge_collapse(edges, desired_verts_number)
-
-    @staticmethod
-    def _load_mesh(mesh_path):
-        mesh = trimesh.load_mesh(mesh_path, 'ply', process=False)
-        feat_and_cont = utils.extract_feature_and_contour_from_colour(mesh)
-        mesh_verts = torch.tensor(mesh.vertices, dtype=torch.float,
-                                  requires_grad=False)
-        face = torch.from_numpy(mesh.faces).t().to(torch.long).contiguous()
-        mesh_colors = torch.tensor(mesh.visual.vertex_colors[:, :-1],
-                                   dtype=torch.float, requires_grad=False)
-        data = Data(pos=mesh_verts, face=face, colors=mesh_colors,
-                    feat_and_cont=feat_and_cont)
-        data = torch_geometric.transforms.FaceToEdge(False)(data)
-        return data
 
     def _vertex_quadrics(self):  # 7.7s
         """Computes a quadric for each vertex in the Mesh.
