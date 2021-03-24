@@ -24,16 +24,16 @@ class MeshSimplifier:
         self._debug = debug
         self._quadrics = self._vertex_quadrics()
 
-    def __call__(self, desired_verts_number=None, local=False):
+    def __call__(self, sampling_factor, local=False):
         edges = self._in_mesh.edge_index.t()
         edges = edges[edges[:, 0] < edges[:, 1]].numpy()
 
         if local and hasattr(self._in_mesh, 'feat_and_cont'):
             sampled, down_mat = self.local_quadric_edge_collapse(
-                edges, desired_verts_number)
+                edges, sampling_factor)
         else:
             sampled, down_mat = self.quadric_edge_collapse(
-                edges, desired_verts_number)
+                edges, sampling_factor)
         up_mat = self._get_upsampling_transformation(sampled)
         return sampled, down_mat, up_mat
 
@@ -45,7 +45,7 @@ class MeshSimplifier:
     def quadrics(self):
         return self._quadrics
 
-    def quadric_edge_collapse(self, edges, desired_verts_number):
+    def quadric_edge_collapse(self, edges, sampling_factor):
         # 24.27s vs 1167.70s before (sampling factor 0.8)
         h = []
         for e_idx, e in enumerate(edges):
@@ -56,6 +56,8 @@ class MeshSimplifier:
         verts_number = self._in_mesh.pos.shape[0]
         faces = self._in_mesh.face.clone().numpy()
 
+        desired_verts_number = \
+            math.ceil(self._in_mesh.pos.shape[0] / sampling_factor)
         while verts_number > desired_verts_number:  # 0.0007076s vs 0.06s before
             top_elem_cost, top_elem_edge_index = heapq.heappop(h)
 
@@ -98,17 +100,23 @@ class MeshSimplifier:
         new_mesh = self._get_sampled_mesh(downsampling_matrix, new_faces)
         return new_mesh, downsampling_matrix
 
-    def local_quadric_edge_collapse(self, edges, desired_verts_number):
+    def local_quadric_edge_collapse(self, edges, sampling_factor):
         features = self._in_mesh.feat_and_cont
         key = list(features.keys())[11]
         feature_idx = features[key]['feature']
+        contour_idx = features[key]['contour']
+        feature_idx.extend(contour_idx)
 
         edges_of_region = []
         for idx in feature_idx:
             edges_of_region.extend(edges[np.argwhere(edges == idx)[0, :]])
 
         edges = np.stack(edges_of_region)
-        return self.quadric_edge_collapse(edges, desired_verts_number)
+        new_mesh, downsampling_matrix_mat = self.quadric_edge_collapse(
+            edges, sampling_factor)
+        new_mesh.feat_and_cont = \
+            utils.extract_feature_and_contour_from_colour(new_mesh)
+        return new_mesh, downsampling_matrix_mat
 
     def _vertex_quadrics(self):  # 7.7s
         """Computes a quadric for each vertex in the Mesh.
@@ -183,7 +191,7 @@ class MeshSimplifier:
         )
         face = torch.from_numpy(new_faces).t().to(torch.long).contiguous()
         data = Data(pos=mesh_verts, face=face, colors=mesh_colors)
-
+        data = torch_geometric.transforms.FaceToEdge(False)(data)
         if self._debug:
             trim = torch_geometric.utils.to_trimesh(data)
             trim.visual.vertex_colors = mesh_colors.numpy()
@@ -234,6 +242,5 @@ if __name__ == '__main__':
     # mesh = mesh.simplify_quadratic_decimation(mesh.faces.shape[0] / 100)
     t = time.time()
     simplifier = MeshSimplifier('UHM_models/mean_nme_fcolor_b.ply', debug=True)
-    m, down, up = simplifier(math.ceil(simplifier.in_mesh.pos.shape[0] * 0.93),
-                             local=True)
+    m, down, up = simplifier(1.075, local=True)
     print(time.time() - t)

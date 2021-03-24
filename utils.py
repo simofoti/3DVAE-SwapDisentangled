@@ -22,9 +22,18 @@ def load_template(mesh_path):
     return data
 
 
-def extract_feature_and_contour_from_colour(colored_trimesh):
+def extract_feature_and_contour_from_colour(colored):
     # assuming that the feature is colored in red and its contour in black
-    colors = colored_trimesh.visual.vertex_colors
+    if isinstance(colored, torch_geometric.data.Data):
+        assert hasattr(colored, 'colors')
+        colored_trimesh = torch_geometric.utils.to_trimesh(colored)
+        colors = colored.colors.numpy()
+    elif isinstance(colored, trimesh.Trimesh):
+        colored_trimesh = colored
+        colors = colored_trimesh.visual.vertex_colors
+    else:
+        raise NotImplementedError
+
     graph = nx.from_edgelist(colored_trimesh.edges_unique)
     one_rings_indices = [list(graph[i].keys()) for i in range(len(colors))]
 
