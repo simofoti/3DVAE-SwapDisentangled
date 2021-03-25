@@ -14,7 +14,7 @@ def load_template(mesh_path):
     mesh_verts = torch.tensor(mesh.vertices, dtype=torch.float,
                               requires_grad=False)
     face = torch.from_numpy(mesh.faces).t().to(torch.long).contiguous()
-    mesh_colors = torch.tensor(mesh.visual.vertex_colors[:, :-1],
+    mesh_colors = torch.tensor(mesh.visual.vertex_colors,
                                dtype=torch.float, requires_grad=False)
     data = Data(pos=mesh_verts, face=face, colors=mesh_colors,
                 feat_and_cont=feat_and_cont)
@@ -27,7 +27,7 @@ def extract_feature_and_contour_from_colour(colored):
     if isinstance(colored, torch_geometric.data.Data):
         assert hasattr(colored, 'colors')
         colored_trimesh = torch_geometric.utils.to_trimesh(colored)
-        colors = colored.colors.numpy()
+        colors = colored.colors.to(torch.long).numpy()
     elif isinstance(colored, trimesh.Trimesh):
         colored_trimesh = colored
         colors = colored_trimesh.visual.vertex_colors
