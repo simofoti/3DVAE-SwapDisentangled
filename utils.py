@@ -108,3 +108,8 @@ def is_contour(colors, center_index, ring_indices):
             return True
     return False
 
+
+def to_torch_sparse(spmat):
+    return torch.sparse_coo_tensor(
+        torch.LongTensor([spmat.tocoo().row, spmat.tocoo().col]),
+        torch.FloatTensor(spmat.tocoo().data), torch.Size(spmat.tocoo().shape))

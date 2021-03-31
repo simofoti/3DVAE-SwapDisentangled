@@ -29,7 +29,8 @@ class MeshSimplifier:
         sampled, down_mat = self.quadric_edge_collapse(
             sampling_factor, region_weighted, edge_length_weighted)
         up_mat = self._get_upsampling_transformation(sampled)
-        return sampled, down_mat, up_mat
+        return sampled, utils.to_torch_sparse(down_mat), \
+            utils.to_torch_sparse(up_mat)
 
     @property
     def in_mesh(self):
@@ -38,6 +39,35 @@ class MeshSimplifier:
     @property
     def quadrics(self):
         return self._quadrics
+
+    def quadric_edge_collapse(self, sampling_factor, region_weighted=False,
+                              edge_length_weighted=False):
+        desired_verts_number = \
+            math.ceil(self._in_mesh.pos.shape[0] / sampling_factor)
+        edges = self._in_mesh.edge_index.t()
+        edges = edges[edges[:, 0] < edges[:, 1]].numpy()
+
+        region_weights = None
+        if region_weighted:
+            rw = {k: 1 / (len(fc['feature']) + len(fc['contour']))
+                  for k, fc in self._in_mesh.feat_and_cont.items()}
+            fc = self._in_mesh.feat_and_cont
+            region_weights = np.ones(self._in_mesh.pos.shape[0])
+            for key, w in rw.items():
+                feat_and_cont = fc[key]['feature']
+                feat_and_cont.extend(fc[key]['contour'])
+                region_weights[feat_and_cont] = w
+
+        faces = self._quadric_edge_collapse(
+            edges, desired_verts_number, region_weights=region_weights,
+            edge_length_weighted=edge_length_weighted)
+
+        new_faces, downsampling_matrix = self._get_new_faces_and_downsampling(
+            faces, self._in_mesh.num_nodes)
+        new_mesh = self._get_sampled_mesh(downsampling_matrix, new_faces)
+        new_mesh.feat_and_cont = \
+            utils.extract_feature_and_contour_from_colour(new_mesh)
+        return new_mesh, downsampling_matrix
 
     def _quadric_edge_collapse(self, edges, desired_verts_number,
                                region_weights=None, edge_length_weighted=False):
@@ -88,35 +118,6 @@ class MeshSimplifier:
         faces_to_keep = np.logical_not(self.logical_or3(a, b, c))
         faces = faces[:, faces_to_keep].copy()
         return faces
-
-    def quadric_edge_collapse(self, sampling_factor, region_weighted=False,
-                              edge_length_weighted=False):
-        desired_verts_number = \
-            math.ceil(self._in_mesh.pos.shape[0] / sampling_factor)
-        edges = self._in_mesh.edge_index.t()
-        edges = edges[edges[:, 0] < edges[:, 1]].numpy()
-
-        region_weights = None
-        if region_weighted:
-            rw = {k: 1 / (len(fc['feature']) + len(fc['contour']))
-                  for k, fc in self._in_mesh.feat_and_cont.items()}
-            fc = self._in_mesh.feat_and_cont
-            region_weights = np.ones(self._in_mesh.pos.shape[0])
-            for key, w in rw.items():
-                feat_and_cont = fc[key]['feature']
-                feat_and_cont.extend(fc[key]['contour'])
-                region_weights[feat_and_cont] = w
-
-        faces = self._quadric_edge_collapse(
-            edges, desired_verts_number, region_weights=region_weights,
-            edge_length_weighted=edge_length_weighted)
-
-        new_faces, downsampling_matrix = self._get_new_faces_and_downsampling(
-            faces, self._in_mesh.num_nodes)
-        new_mesh = self._get_sampled_mesh(downsampling_matrix, new_faces)
-        new_mesh.feat_and_cont = \
-            utils.extract_feature_and_contour_from_colour(new_mesh)
-        return new_mesh, downsampling_matrix
 
     def _vertex_quadrics(self):  # 7.7s
         """Computes a quadric for each vertex in the Mesh.
