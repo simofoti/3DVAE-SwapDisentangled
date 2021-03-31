@@ -24,22 +24,10 @@ class MeshSimplifier:
         self._debug = debug
         self._quadrics = self._vertex_quadrics()
 
-        edges = self._in_mesh.edge_index.t()
-        edges = edges[edges[:, 0] < edges[:, 1]].numpy()
-        self._current_edges = edges
-        self._current_faces = self._in_mesh.face.clone().numpy()
-        self._current_verts_number = self._in_mesh.pos.shape[0]
-
-    def __call__(self, sampling_factor=None, local_verts_numbers=None):
-        assert bool(sampling_factor) != bool(local_verts_numbers)
-
-        if local_verts_numbers:
-            assert hasattr(self._in_mesh, 'feat_and_cont')
-            sampled, down_mat = self.local_quadric_edge_collapse(
-                local_verts_numbers)
-        else:
-            sampled, down_mat = self.global_quadric_edge_collapse(
-                sampling_factor)
+    def __call__(self, sampling_factor, region_weighted=False,
+                 edge_length_weighted=False):
+        sampled, down_mat = self.quadric_edge_collapse(
+            sampling_factor, region_weighted, edge_length_weighted)
         up_mat = self._get_upsampling_transformation(sampled)
         return sampled, down_mat, up_mat
 
@@ -52,16 +40,17 @@ class MeshSimplifier:
         return self._quadrics
 
     def _quadric_edge_collapse(self, edges, desired_verts_number,
-                               update_current_edges=False):
+                               region_weights=None, edge_length_weighted=False):
         # 24.27s vs 1167.70s before (sampling factor 0.8)
+        verts_number = self._in_mesh.pos.shape[0]
+        faces = self._in_mesh.face.clone().numpy()
+
         h = []
         for e_idx, e in enumerate(edges):
-            cost = self._edge_collapse_cost(e)
+            cost = self._edge_collapse_cost(e, region_weights,
+                                            edge_length_weighted)
             h.append((cost['collapse_cost'], e_idx))
         heapq.heapify(h)
-
-        verts_number = self._current_verts_number
-        faces = self._current_faces.copy()
 
         while verts_number > desired_verts_number:  # 0.0007076s vs 0.06s before
             top_elem_cost, top_elem_edge_index = heapq.heappop(h)
@@ -70,7 +59,8 @@ class MeshSimplifier:
                 continue
 
             current_cost = self._edge_collapse_cost(
-                [edges[top_elem_edge_index][0], edges[top_elem_edge_index][1]])
+                [edges[top_elem_edge_index][0], edges[top_elem_edge_index][1]],
+                region_weights, edge_length_weighted)
             if current_cost['collapse_cost'] > top_elem_cost:
                 # if the cost was wrong, put back in heap with correct cost
                 heapq.heappush(h, (current_cost['collapse_cost'],
@@ -86,9 +76,6 @@ class MeshSimplifier:
 
                 np.place(faces, faces == to_destroy, to_keep)
                 np.place(edges, edges == to_destroy, to_keep)
-                if update_current_edges:
-                    np.place(self._current_edges,
-                             self._current_edges == to_destroy, to_keep)
 
                 self._quadrics[to_keep] = current_cost['quadric_sum']
                 self._quadrics[to_destroy] = current_cost['quadric_sum']
@@ -100,46 +87,29 @@ class MeshSimplifier:
         c = faces[2, :] == faces[0, :]
         faces_to_keep = np.logical_not(self.logical_or3(a, b, c))
         faces = faces[:, faces_to_keep].copy()
-        self._current_faces = faces
-        self._current_verts_number = verts_number
         return faces
 
-    def global_quadric_edge_collapse(self, sampling_factor):
+    def quadric_edge_collapse(self, sampling_factor, region_weighted=False,
+                              edge_length_weighted=False):
         desired_verts_number = \
             math.ceil(self._in_mesh.pos.shape[0] / sampling_factor)
-        edges = self._current_edges.copy()
-        faces = self._quadric_edge_collapse(edges, desired_verts_number)
+        edges = self._in_mesh.edge_index.t()
+        edges = edges[edges[:, 0] < edges[:, 1]].numpy()
 
-        new_faces, downsampling_matrix = self._get_new_faces_and_downsampling(
-            faces, self._in_mesh.num_nodes)
-        new_mesh = self._get_sampled_mesh(downsampling_matrix, new_faces)
-        return new_mesh, downsampling_matrix
+        region_weights = None
+        if region_weighted:
+            rw = {k: 1 / (len(fc['feature']) + len(fc['contour']))
+                  for k, fc in self._in_mesh.feat_and_cont.items()}
+            fc = self._in_mesh.feat_and_cont
+            region_weights = np.ones(self._in_mesh.pos.shape[0])
+            for key, w in rw.items():
+                feat_and_cont = fc[key]['feature']
+                feat_and_cont.extend(fc[key]['contour'])
+                region_weights[feat_and_cont] = w
 
-    def local_quadric_edge_collapse(self, local_verts_numbers):
-        features = self._in_mesh.feat_and_cont
-        for key, target_local_verts in local_verts_numbers.items():
-            feature_idx = features[key]['feature']
-            # TODO: vertices on contour may have been deleted already
-            contour_idx = features[key]['contour']
-            # feature_idx.extend(contour_idx)
-
-            edges_of_region = []
-            for idx in feature_idx:
-                edges_of_region.extend(
-                    self._current_edges[
-                        np.argwhere(self._current_edges == idx)[0, :]])
-            for idx in contour_idx:
-                try:
-                    edges_of_region.extend(
-                        self._current_edges[
-                            np.argwhere(self._current_edges == idx)[0, :]])
-                except IndexError:
-                    pass
-
-            v_n = self._current_verts_number - \
-                len(feature_idx) + target_local_verts
-            faces = self._quadric_edge_collapse(np.stack(edges_of_region), v_n,
-                                                update_current_edges=True)
+        faces = self._quadric_edge_collapse(
+            edges, desired_verts_number, region_weights=region_weights,
+            edge_length_weighted=edge_length_weighted)
 
         new_faces, downsampling_matrix = self._get_new_faces_and_downsampling(
             faces, self._in_mesh.num_nodes)
@@ -169,7 +139,8 @@ class MeshSimplifier:
                 v_quadrics[face[k, f_idx], :, :] += np.outer(eq, eq)
         return v_quadrics
 
-    def _edge_collapse_cost(self, edge):  # 0.00012s
+    def _edge_collapse_cost(self, edge, region_w=None, length_w=False):
+        # 0.00012s
         vertices = self._in_mesh.pos.cpu().numpy()
         v0_id, v1_id = edge[0], edge[1]
         quadrics_sum = self._quadrics[v0_id, :, :] + self._quadrics[v1_id, :, :]
@@ -180,10 +151,17 @@ class MeshSimplifier:
 
         destroy_0_cost = p0.T.dot(quadrics_sum).dot(p0).item()
         destroy_1_cost = p1.T.dot(quadrics_sum).dot(p1).item()
+        collapse_cost = min([destroy_0_cost, destroy_1_cost])
+
+        if length_w:
+            collapse_cost += np.linalg.norm(vertices[v0_id] - vertices[v1_id])
+        if region_w is not None:
+            collapse_cost *= (region_w[v0_id] + region_w[v1_id]) / 2
+
         return {
             'destroy_0_cost': destroy_0_cost,
             'destroy_1_cost': destroy_1_cost,
-            'collapse_cost': min([destroy_0_cost, destroy_1_cost]),
+            'collapse_cost': collapse_cost,
             'quadric_sum': quadrics_sum
         }
 
@@ -276,8 +254,6 @@ if __name__ == '__main__':
     # mesh = mesh.simplify_quadratic_decimation(mesh.faces.shape[0] / 100)
     t = time.time()
     simplifier = MeshSimplifier('UHM_models/mean_nme_fcolor_b.ply', debug=True)
-    # m, down, up = simplifier(2)
-    m, down, up = simplifier(
-        local_verts_numbers={'[ 35  41  73 255]': 400,
-                             '[237  26  77 255]': 3000})
+    m, down, up = simplifier(10, region_weighted=True,
+                             edge_length_weighted=False)
     print(time.time() - t)

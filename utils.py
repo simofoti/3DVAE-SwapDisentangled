@@ -51,12 +51,14 @@ def extract_feature_and_contour_from_colour(colored):
     # assign them to adjacent region
     elem_to_remove = []
     for key, feat in features.items():
-        if len(feat['feature']) < 5:
+        if len(feat['feature']) < 3:
             elem_to_remove.append(key)
             for idx in feat['feature']:
                 counts = Counter([str(colors[ri])
                                   for ri in one_rings_indices[idx]])
                 most_common = counts.most_common(1)[0][0]
+                if most_common == key:
+                    break
                 features[most_common]['feature'].append(idx)
                 features[most_common]['contour'].append(idx)
     for e in elem_to_remove:
