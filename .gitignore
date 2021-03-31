@@ -6,3 +6,5 @@ UHM_models
 __pycache__/
 
 experiments/
+
+outputs/

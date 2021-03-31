@@ -1,3 +1,5 @@
+import os
+import yaml
 import trimesh
 import torch
 import torch_geometric.transforms
@@ -6,6 +8,19 @@ import networkx as nx
 import numpy as np
 from collections import Counter
 from torch_geometric.data import Data
+
+
+def get_config(config):
+    with open(config, 'r') as stream:
+        return yaml.safe_load(stream)
+
+
+def prepare_sub_folder(output_directory):
+    checkpoint_directory = os.path.join(output_directory, 'checkpoints')
+    if not os.path.exists(checkpoint_directory):
+        print(f"Creating directory: {checkpoint_directory}")
+        os.makedirs(checkpoint_directory)
+        return checkpoint_directory
 
 
 def load_template(mesh_path):
