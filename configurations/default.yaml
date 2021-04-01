@@ -1,4 +1,9 @@
-template_path: UHM_models/mean_nme_fcolor_b.ply
+data:
+  template_path: UHM_models/mean_nme_fcolor_b.ply                               # vertices should be coloured (vertex semantic segmentation)
+  pca_path: UHM_models/head_model_global_align_no_mouth_and_eyes.pkl            # to be used if data are generated with UHM
+  dataset_path: vertices_of_faces_from_UHM
+  std_pca_latent: 1                                                             # for data generation, 1 to sample from correct distribution, > 1 exaggerate face shapes
+  number_of_meshes: 10000                                                       # for data generation, > 0 if you want to generate data
 
 model:
   sampling:

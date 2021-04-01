@@ -8,3 +8,5 @@ __pycache__/
 experiments/
 
 outputs/
+
+vertices_of_faces_from_UHM
