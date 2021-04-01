@@ -21,7 +21,10 @@ class ModelManager(torch.nn.Module):
             self._precompute_transformations()
         meshes_all_resolutions = [self.template] + low_res_templates
         spirals_indices = self._precompute_spirals(meshes_all_resolutions)
-        self.net = AE(in_channels=3, out_channels=3, latent_channels=None,
+
+        self.net = AE(in_channels=self._model_params['in_channels'],
+                      out_channels=self._model_params['out_channels'],
+                      latent_size=self._model_params['latent_size'],
                       spiral_indices=spirals_indices,
                       down_transform=down_transforms,
                       up_transform=up_transforms)

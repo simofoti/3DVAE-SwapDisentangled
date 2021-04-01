@@ -12,3 +12,6 @@ model:
   spirals:
     length: [9, 9, 9, 9]                                                        # length of spiral for each convolution. Delete precomputed file if changed.
     dilation: [1, 1, 1, 1]                                                      # spiral dilation for each convolution. Delete precomputed file if changed.
+  in_channels: 3                                                                # number of input vertex features. Most likely 3 (x, y, z)
+  out_channels: [32, 32, 32, 64]                                                # channels of intermediate layers
+  latent_size: 16                                                               # size of the latent vector
