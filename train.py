@@ -44,3 +44,8 @@ manager = ModelManager(configurations=config, device=device)
 
 train_loader, validation_loader, test_loader, normalization_dict = \
     get_data_loaders(config, manager.template)
+
+for epoch in tqdm.tqdm(range(config['optimization']['epochs'])):
+    manager.run_epoch(train_loader, device, train=True)
+
+    manager.run_epoch(validation_loader, device, train=False)

@@ -7,6 +7,12 @@ data:
   number_of_meshes: 10000                                                       # for data generation, > 0 if you want to generate data
   number_of_workers: 8
 
+optimization:
+  epochs: 100
+  batch_size: 8
+  lr: 1e-3
+  weight_decay: 0
+
 model:
   sampling:
     type: r_weighted                                                            # {basic, r_weighted}. Delete precomputed file if changed

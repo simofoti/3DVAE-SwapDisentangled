@@ -13,6 +13,7 @@ class ModelManager(torch.nn.Module):
                  precomputed_storage_path='precomputed'):
         super(ModelManager, self).__init__()
         self._model_params = configurations['model']
+        self._optimization_params = configurations['optimization']
         self._precomputed_storage_path = precomputed_storage_path
         self.device = device
         self.template = utils.load_template(
@@ -22,12 +23,23 @@ class ModelManager(torch.nn.Module):
         meshes_all_resolutions = [self.template] + low_res_templates
         spirals_indices = self._precompute_spirals(meshes_all_resolutions)
 
-        self.net = AE(in_channels=self._model_params['in_channels'],
-                      out_channels=self._model_params['out_channels'],
-                      latent_size=self._model_params['latent_size'],
-                      spiral_indices=spirals_indices,
-                      down_transform=down_transforms,
-                      up_transform=up_transforms)
+        self._net = AE(in_channels=self._model_params['in_channels'],
+                       out_channels=self._model_params['out_channels'],
+                       latent_size=self._model_params['latent_size'],
+                       spiral_indices=spirals_indices,
+                       down_transform=down_transforms,
+                       up_transform=up_transforms).to(device)
+
+        self._optimizer = torch.optim.Adam(
+            self._net.parameters(),
+            lr=float(self._optimization_params['lr']),
+            weight_decay=self._optimization_params['weight_decay'])
+
+        self._losses = None
+
+    @property
+    def loss_keys(self):
+        return ['reconstruction']
 
     def _precompute_transformations(self):
         storage_path = os.path.join(self._precomputed_storage_path,
@@ -59,6 +71,9 @@ class ModelManager(torch.nn.Module):
             with open(storage_path, 'wb') as file:
                 pickle.dump(
                     [low_res_templates, down_transforms, up_transforms], file)
+
+        down_transforms = [d.to(self.device) for d in down_transforms]
+        up_transforms = [u.to(self.device) for u in up_transforms]
         return low_res_templates, down_transforms, up_transforms
 
     def _precompute_spirals(self, templates):
@@ -79,4 +94,60 @@ class ModelManager(torch.nn.Module):
                                       spirals_params['dilation'][i]))
             with open(storage_path, 'wb') as file:
                 pickle.dump(spiral_indices_list, file)
+        spiral_indices_list = [s.to(self.device) for s in spiral_indices_list]
         return spiral_indices_list
+
+    def forward(self, data):
+        return self._net(data.x)
+
+    def run_epoch(self, data_loader, device, train=True):
+        if train:
+            self._net.train()
+        else:
+            self._net.eval()
+
+        self._reset_losses()
+        it = 0
+        for it, data in enumerate(data_loader):
+            if train:
+                losses = self._do_iteration(data, device, train=True)
+            else:
+                with torch.no_grad():
+                    losses = self._do_iteration(data, device, train=False)
+            self._add_losses(losses)
+        self._divide_losses(it + 1)
+
+    def _do_iteration(self, data, device='cpu', train=True):
+        if train:
+            self._optimizer.zero_grad()
+
+        data = data.to(device)
+        reconstructed = self.forward(data)
+        loss_recon = self._compute_mse_loss(reconstructed, data.x)
+
+        if train:
+            loss_recon.backward()
+            self._optimizer.step()
+        return {'reconstruction': loss_recon.item()}
+
+    @staticmethod
+    def _compute_l1_loss(prediction, gt, reduction='mean'):
+        return torch.nn.L1Loss(reduction=reduction)(prediction, gt)
+
+    @staticmethod
+    def _compute_mse_loss(prediction, gt, reduction='mean'):
+        return torch.nn.MSELoss(reduction=reduction)(prediction, gt)
+
+    def _reset_losses(self):
+        self._losses = {k: 0 for k in self.loss_keys}
+
+    def _add_losses(self, additive_losses):
+        for k in self.loss_keys:
+            loss = additive_losses[k]
+            self._losses[k] += loss.item() if torch.is_tensor(loss) else loss
+
+    def _divide_losses(self, value):
+        for k in self.loss_keys:
+            self._losses[k] /= value
+
+
