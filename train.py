@@ -6,7 +6,7 @@ import torch.nn
 from torch.utils.tensorboard import SummaryWriter
 
 import utils
-from data_generation_and_loading import DataGenerator
+from data_generation_and_loading import DataGenerator, get_data_loaders
 from model_manager import ModelManager
 
 parser = argparse.ArgumentParser()
@@ -41,3 +41,6 @@ data_generator(config['data']['number_of_meshes'],
                config['data']['std_pca_latent'], opts.generate_data)
 
 manager = ModelManager(configurations=config, device=device)
+
+train_loader, validation_loader, test_loader, normalization_dict = \
+    get_data_loaders(config, manager.template)
