@@ -2,6 +2,22 @@ import os
 import pickle
 import torch.nn
 
+from torchvision.utils import make_grid
+from pytorch3d.structures import Meshes
+from pytorch3d.renderer.blending import hard_rgb_blend
+from pytorch3d.renderer import (
+    look_at_view_transform,
+    FoVPerspectiveCameras,
+    PointLights,
+    Materials,
+    RasterizationSettings,
+    MeshRenderer,
+    MeshRasterizer,
+    TexturesVertex,
+    BlendParams,
+    HardGouraudShader
+)
+
 import utils
 from mesh_simplification import MeshSimplifier
 from compute_spirals import preprocess_spiral
@@ -9,15 +25,19 @@ from model import AE
 
 
 class ModelManager(torch.nn.Module):
-    def __init__(self, configurations, device,
+    def __init__(self, configurations, device, rendering_device=None,
                  precomputed_storage_path='precomputed'):
         super(ModelManager, self).__init__()
         self._model_params = configurations['model']
         self._optimization_params = configurations['optimization']
         self._precomputed_storage_path = precomputed_storage_path
+        self._normalized_data = configurations['data']['normalize_data']
+
+        self.to_mm_const = configurations['data']['to_mm_constant']
         self.device = device
         self.template = utils.load_template(
             configurations['data']['template_path'])
+
         low_res_templates, down_transforms, up_transforms = \
             self._precompute_transformations()
         meshes_all_resolutions = [self.template] + low_res_templates
@@ -36,6 +56,14 @@ class ModelManager(torch.nn.Module):
             weight_decay=self._optimization_params['weight_decay'])
 
         self._losses = None
+
+        self._rend_device = rendering_device if rendering_device else device
+        self._default_shader = HardGouraudShader(
+            cameras=FoVPerspectiveCameras(),
+            blend_params=BlendParams(background_color=[0, 0, 0]))
+        self._simple_shader = ShadelessShader(
+            blend_params=BlendParams(background_color=[0, 0, 0]))
+        self.renderer = self._create_renderer()
 
     @property
     def loss_keys(self):
@@ -150,4 +178,91 @@ class ModelManager(torch.nn.Module):
         for k in self.loss_keys:
             self._losses[k] /= value
 
+    def log_losses(self, writer, epoch, phase='train'):
+        for k in self.loss_keys:
+            loss = self._losses[k]
+            loss = loss.item() if torch.is_tensor(loss) else loss
+            writer.add_scalar(
+                phase + '/' + str(k), loss, epoch + 1)
+
+    def log_images(self, in_data, writer, epoch, normalization_dict=None,
+                   phase='train', error_max_scale=5):
+        gt_meshes = in_data.x.to(self._rend_device)
+        out_meshes = self.forward(in_data.to(self.device))
+        out_meshes = out_meshes.to(self._rend_device)
+
+        if self._normalized_data:
+            mean_mesh = normalization_dict['mean'].to(self._rend_device)
+            std_mesh = normalization_dict['std'].to(self._rend_device)
+            gt_meshes = gt_meshes * std_mesh + mean_mesh
+            out_meshes = out_meshes * std_mesh + mean_mesh
+
+        vertex_errors = self._compute_mse_loss(
+            out_meshes, gt_meshes, reduction='none')
+        vertex_errors = torch.sqrt(torch.sum(vertex_errors, dim=-1))
+        vertex_errors *= self.to_mm_const
+
+        gt_renders = self._render(gt_meshes)
+        out_renders = self._render(out_meshes)
+        errors_renders = self._render(out_meshes, vertex_errors,
+                                      error_max_scale)
+        log = torch.cat([gt_renders, out_renders, errors_renders], dim=-1)
+        log = make_grid(log, padding=10, pad_value=1, nrow=3)
+        writer.add_image(tag=phase, global_step=epoch + 1, img_tensor=log)
+
+    def _create_renderer(self, img_size=256):
+        raster_settings = RasterizationSettings(image_size=img_size)
+        renderer = MeshRenderer(
+            rasterizer=MeshRasterizer(raster_settings=raster_settings,
+                                      cameras=FoVPerspectiveCameras()),
+            shader=self._default_shader)
+        renderer.to(self._rend_device)
+        return renderer
+
+    @torch.no_grad()
+    def _render(self, batched_data, vertex_errors=None, error_max_scale=None):
+        batch_size = batched_data.shape[0]
+        batched_verts = batched_data.detach().to(self._rend_device)
+        template = self.template.to(self._rend_device)
+
+        if vertex_errors is not None:
+            self.renderer.shader = self._simple_shader
+            textures = TexturesVertex(utils.errors_to_colors(
+                vertex_errors, min_value=0,
+                max_value=error_max_scale, cmap='plasma') / 255)
+        else:
+            self.renderer.shader = self._default_shader
+            textures = TexturesVertex(torch.ones_like(batched_verts) * 0.5)
+
+        meshes = Meshes(
+            verts=batched_verts,
+            faces=template.face.t().expand(batch_size, -1, -1),
+            textures=textures)
+
+        rotation, translation = look_at_view_transform(
+            dist=2.5, elev=0, azim=15)
+        cameras = FoVPerspectiveCameras(R=rotation, T=translation,
+                                        device=self._rend_device)
+
+        lights = PointLights(location=[[0.0, 0.0, 3.0]],
+                             diffuse_color=[[1., 1., 1.]],
+                             device=self._rend_device)
+
+        materials = Materials(shininess=0.5, device=self._rend_device)
+
+        images = self.renderer(meshes, cameras=cameras, lights=lights,
+                               materials=materials).permute(0, 3, 1, 2)
+        return images[:, :3, ::]
+
+
+class ShadelessShader(torch.nn.Module):
+    def __init__(self, blend_params=None):
+        super().__init__()
+        self.blend_params = \
+            blend_params if blend_params is not None else BlendParams()
+
+    def forward(self, fragments, meshes, **kwargs):
+        pixel_colors = meshes.sample_textures(fragments)
+        images = hard_rgb_blend(pixel_colors, fragments, self.blend_params)
+        return images
 

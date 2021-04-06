@@ -2,6 +2,8 @@ import os
 import yaml
 import trimesh
 import torch
+
+import matplotlib.cm
 import torch_geometric.transforms
 
 import networkx as nx
@@ -113,3 +115,16 @@ def to_torch_sparse(spmat):
     return torch.sparse_coo_tensor(
         torch.LongTensor([spmat.tocoo().row, spmat.tocoo().col]),
         torch.FloatTensor(spmat.tocoo().data), torch.Size(spmat.tocoo().shape))
+
+
+def errors_to_colors(values, min_value=None, max_value=None, cmap=None):
+    device = values.device
+    min_value = values.min() if min_value is None else min_value
+    max_value = values.max() if max_value is None else max_value
+    if min_value != max_value:
+        values = (values - min_value) / (max_value - min_value)
+
+    cmapper = matplotlib.cm.get_cmap(cmap)
+    values = cmapper(values.cpu().detach().numpy(), bytes=True)
+    return torch.tensor(values[:, :, :3]).to(device)
+

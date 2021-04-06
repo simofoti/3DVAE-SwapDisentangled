@@ -3,6 +3,7 @@ data:
   pca_path: UHM_models/head_model_global_align_no_mouth_and_eyes.pkl            # to be used if data are generated with UHM
   dataset_path: vertices_of_faces_from_UHM
   normalize_data: True
+  to_mm_constant: 156.28255886643                                               # if already in mm set to 1, otherwise set proper multiplicative constant
   std_pca_latent: 1                                                             # for data generation, 1 to sample from correct distribution, > 1 exaggerate face shapes
   number_of_meshes: 10000                                                       # for data generation, > 0 if you want to generate data
   number_of_workers: 8
@@ -23,3 +24,6 @@ model:
   in_channels: 3                                                                # number of input vertex features. Most likely 3 (x, y, z)
   out_channels: [32, 32, 32, 64]                                                # channels of intermediate layers
   latent_size: 16                                                               # size of the latent vector
+
+logging_frequency:
+  tb_renderings: 10

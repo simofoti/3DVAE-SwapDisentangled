@@ -17,3 +17,5 @@ pip install torch-cluster -f https://pytorch-geometric.com/whl/torch-${TORCH}+${
 pip install torch-spline-conv -f https://pytorch-geometric.com/whl/torch-${TORCH}+${CUDA}.html
 pip install torch-geometric
 
+export PYTHON_V=38
+pip install pytorch3d -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py${PYTHON_V}_${CUDA}_pyt171/download.html

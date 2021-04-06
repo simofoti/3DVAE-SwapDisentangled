@@ -45,7 +45,18 @@ manager = ModelManager(configurations=config, device=device)
 train_loader, validation_loader, test_loader, normalization_dict = \
     get_data_loaders(config, manager.template)
 
+train_visualization_batch = next(iter(train_loader))
+validation_visualization_batch = next(iter(validation_loader))
+
 for epoch in tqdm.tqdm(range(config['optimization']['epochs'])):
     manager.run_epoch(train_loader, device, train=True)
+    manager.log_losses(writer, epoch, 'train')
 
     manager.run_epoch(validation_loader, device, train=False)
+    manager.log_losses(writer, epoch, 'validation')
+
+    if (epoch + 1) % config['logging_frequency']['tb_renderings'] == 0:
+        manager.log_images(train_visualization_batch, writer, epoch,
+                           normalization_dict, 'train', error_max_scale=2)
+        manager.log_images(validation_visualization_batch, writer, epoch,
+                           normalization_dict, 'validation', error_max_scale=2)
