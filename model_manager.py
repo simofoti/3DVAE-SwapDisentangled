@@ -254,6 +254,22 @@ class ModelManager(torch.nn.Module):
                                materials=materials).permute(0, 3, 1, 2)
         return images[:, :3, ::]
 
+    def save_weights(self, checkpoint_dir, epoch):
+        net_name = os.path.join(checkpoint_dir, 'model_%08d.pt' % (epoch + 1))
+        opt_name = os.path.join(checkpoint_dir, 'optimizer.pt')
+        torch.save({'model': self._net.state_dict()}, net_name)
+        torch.save({'optimizer': self._optimizer.state_dict()}, opt_name)
+
+    def resume(self, checkpoint_dir):
+        last_model_name = utils.get_model_list(checkpoint_dir, 'model')
+        state_dict = torch.load(last_model_name)
+        self._net.load_state_dict(state_dict['model'])
+        epochs = int(last_model_name[-11:-3])
+        state_dict = torch.load(os.path.join(checkpoint_dir, 'optimizer.pt'))
+        self._optimizer.load_state_dict(state_dict['optimizer'])
+        print(f"Resume from epoch {epochs}")
+        return epochs
+
 
 class ShadelessShader(torch.nn.Module):
     def __init__(self, blend_params=None):

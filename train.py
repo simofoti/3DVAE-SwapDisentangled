@@ -35,10 +35,11 @@ if not torch.cuda.is_available():
 else:
     device = torch.device('cuda')
 
-data_generator = DataGenerator(config['data']['pca_path'],
-                               config['data']['dataset_path'])
-data_generator(config['data']['number_of_meshes'],
-               config['data']['std_pca_latent'], opts.generate_data)
+if opts.generate_data:
+    data_generator = DataGenerator(config['data']['pca_path'],
+                                   config['data']['dataset_path'])
+    data_generator(config['data']['number_of_meshes'],
+                   config['data']['std_pca_latent'], opts.generate_data)
 
 manager = ModelManager(configurations=config, device=device)
 
@@ -48,7 +49,12 @@ train_loader, validation_loader, test_loader, normalization_dict = \
 train_visualization_batch = next(iter(train_loader))
 validation_visualization_batch = next(iter(validation_loader))
 
-for epoch in tqdm.tqdm(range(config['optimization']['epochs'])):
+if opts.resume:
+    start_epoch = manager.resume(checkpoint_dir)
+else:
+    start_epoch = 0
+
+for epoch in tqdm.tqdm(range(start_epoch, config['optimization']['epochs'])):
     manager.run_epoch(train_loader, device, train=True)
     manager.log_losses(writer, epoch, 'train')
 
@@ -60,3 +66,5 @@ for epoch in tqdm.tqdm(range(config['optimization']['epochs'])):
                            normalization_dict, 'train', error_max_scale=2)
         manager.log_images(validation_visualization_batch, writer, epoch,
                            normalization_dict, 'validation', error_max_scale=2)
+    if (epoch + 1) % config['logging_frequency']['save_weights'] == 0:
+        manager.save_weights(checkpoint_dir, epoch)

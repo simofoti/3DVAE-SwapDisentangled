@@ -27,3 +27,4 @@ model:
 
 logging_frequency:
   tb_renderings: 10
+  save_weights: 25

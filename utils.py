@@ -128,3 +128,16 @@ def errors_to_colors(values, min_value=None, max_value=None, cmap=None):
     values = cmapper(values.cpu().detach().numpy(), bytes=True)
     return torch.tensor(values[:, :, :3]).to(device)
 
+
+def get_model_list(dirname, key):
+    if os.path.exists(dirname) is False:
+        return None
+    gen_models = [os.path.join(dirname, f) for f in os.listdir(dirname) if
+                  os.path.isfile(
+                      os.path.join(dirname, f)) and key in f and ".pt" in f]
+    if gen_models is None:
+        return None
+    gen_models.sort()
+    last_model_name = gen_models[-1]
+    return last_model_name
+
