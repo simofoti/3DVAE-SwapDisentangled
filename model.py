@@ -143,6 +143,7 @@ class AE(nn.Module):
             else:
                 x = x.view(-1, layer.weight.size(1))
                 x = layer(x)
+                x = torch.sigmoid(x)
         return x
 
     def decode(self, x):
