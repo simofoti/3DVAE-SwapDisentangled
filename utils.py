@@ -117,6 +117,21 @@ def to_torch_sparse(spmat):
         torch.FloatTensor(spmat.tocoo().data), torch.Size(spmat.tocoo().shape))
 
 
+def batch_mm(sparse, matrix_batch):
+    """
+    :param sparse: Sparse matrix, size (m, n).
+    :param matrix_batch: Batched dense matrices, size (b, n, k).
+    :return: The batched matrix-matrix product, size (b, m, k).
+    """
+    batch_size = matrix_batch.shape[0]
+    # Stack the vector batch into columns (b, n, k) -> (n, b, k) -> (n, b*k)
+    matrix = matrix_batch.transpose(0, 1).reshape(sparse.shape[1], -1)
+
+    # And then reverse the reshaping.
+    return sparse.mm(matrix).reshape(sparse.shape[0],
+                                     batch_size, -1).transpose(1, 0)
+
+
 def errors_to_colors(values, min_value=None, max_value=None, cmap=None):
     device = values.device
     min_value = values.min() if min_value is None else min_value

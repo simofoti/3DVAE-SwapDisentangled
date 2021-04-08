@@ -166,6 +166,18 @@ class ModelManager(torch.nn.Module):
     def _compute_mse_loss(prediction, gt, reduction='mean'):
         return torch.nn.MSELoss(reduction=reduction)(prediction, gt)
 
+    def _compute_laplacian_loss(self, prediction, gt, reduction='mean'):
+        laplacian = self.template.laplacian.to(prediction.device)
+        prediction_laplacian = utils.batch_mm(laplacian, prediction[:, :, :3])
+        gt_laplacian = utils.batch_mm(laplacian, gt[:, :, :3])
+        loss = torch.nn.L1Loss(reduction=reduction)(prediction_laplacian,
+                                                    gt_laplacian)
+        return loss
+
+    @staticmethod
+    def _compute_kl_divergence_loss(mu, logvar):
+        return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+
     def _reset_losses(self):
         self._losses = {k: 0 for k in self.loss_keys}
 
