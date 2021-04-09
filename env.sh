@@ -5,7 +5,7 @@ source ./id-generator-env/bin/activate
 
 export CUDA=cu101
 
-pip install trimesh pyrender tqdm matplotlib rtree cmake openmesh tb-nightly
+pip install trimesh pyrender tqdm matplotlib rtree cmake openmesh tb-nightly av seaborn
 
 pip install torch==1.7.1+${CUDA} torchvision==0.8.2+${CUDA} -f https://download.pytorch.org/whl/torch_stable.html
 

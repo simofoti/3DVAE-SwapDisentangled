@@ -1,6 +1,7 @@
 import os
 import pickle
 import torch.nn
+import trimesh
 
 from torchvision.utils import make_grid
 from pytorch3d.structures import Meshes
@@ -128,6 +129,16 @@ class ModelManager(torch.nn.Module):
     def forward(self, data):
         return self._net(data.x)
 
+    @torch.no_grad()
+    def encode(self, data):
+        self._net.eval()
+        return self._net.encode(data)
+
+    @torch.no_grad()
+    def generate(self, z):
+        self._net.eval()
+        return self._net.decode(z)
+
     def run_epoch(self, data_loader, device, train=True):
         if train:
             self._net.train()
@@ -178,6 +189,13 @@ class ModelManager(torch.nn.Module):
     def _compute_kl_divergence_loss(mu, logvar):
         return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
 
+    def compute_vertex_errors(self, out_verts, gt_verts):
+        vertex_errors = self._compute_mse_loss(
+            out_verts, gt_verts, reduction='none')
+        vertex_errors = torch.sqrt(torch.sum(vertex_errors, dim=-1))
+        vertex_errors *= self.to_mm_const
+        return vertex_errors
+
     def _reset_losses(self):
         self._losses = {k: 0 for k in self.loss_keys}
 
@@ -209,15 +227,12 @@ class ModelManager(torch.nn.Module):
             gt_meshes = gt_meshes * std_mesh + mean_mesh
             out_meshes = out_meshes * std_mesh + mean_mesh
 
-        vertex_errors = self._compute_mse_loss(
-            out_meshes, gt_meshes, reduction='none')
-        vertex_errors = torch.sqrt(torch.sum(vertex_errors, dim=-1))
-        vertex_errors *= self.to_mm_const
+        vertex_errors = self.compute_vertex_errors(out_meshes, gt_meshes)
 
-        gt_renders = self._render(gt_meshes)
-        out_renders = self._render(out_meshes)
-        errors_renders = self._render(out_meshes, vertex_errors,
-                                      error_max_scale)
+        gt_renders = self.render(gt_meshes)
+        out_renders = self.render(out_meshes)
+        errors_renders = self.render(out_meshes, vertex_errors,
+                                     error_max_scale)
         log = torch.cat([gt_renders, out_renders, errors_renders], dim=-1)
         log = make_grid(log, padding=10, pad_value=1, nrow=3)
         writer.add_image(tag=phase, global_step=epoch + 1, img_tensor=log)
@@ -232,7 +247,7 @@ class ModelManager(torch.nn.Module):
         return renderer
 
     @torch.no_grad()
-    def _render(self, batched_data, vertex_errors=None, error_max_scale=None):
+    def render(self, batched_data, vertex_errors=None, error_max_scale=None):
         batch_size = batched_data.shape[0]
         batched_verts = batched_data.detach().to(self._rend_device)
         template = self.template.to(self._rend_device)
@@ -265,6 +280,16 @@ class ModelManager(torch.nn.Module):
         images = self.renderer(meshes, cameras=cameras, lights=lights,
                                materials=materials).permute(0, 3, 1, 2)
         return images[:, :3, ::]
+
+    def show_mesh(self, vertices, normalization_dict=None):
+        vertices = torch.squeeze(vertices)
+        if self._normalized_data:
+            mean_verts = normalization_dict['mean'].to(vertices.device)
+            std_verts = normalization_dict['std'].to(vertices.device)
+            vertices = vertices * std_verts + mean_verts
+        mesh = trimesh.Trimesh(vertices.cpu().detach().numpy(),
+                               self.template.face.t().cpu().numpy())
+        mesh.show()
 
     def save_weights(self, checkpoint_dir, epoch):
         net_name = os.path.join(checkpoint_dir, 'model_%08d.pt' % (epoch + 1))
