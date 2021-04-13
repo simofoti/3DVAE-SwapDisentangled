@@ -10,6 +10,7 @@ import numpy as np
 from torch.utils.data.dataloader import default_collate
 from torch_geometric.data import Dataset, InMemoryDataset, Data
 
+from swap_batch_transform import SwapFeatures
 
 class DataGenerator:
     def __init__(self, uhm_path, data_dir='./data'):
@@ -60,24 +61,36 @@ def get_data_loaders(config, template=None):
         normalize=data_config['normalize_data'], template=template)
     normalization_dict = train_set.normalization_dict
 
+    swapper = SwapFeatures(template) if data_config['swap_features'] else None
+
     train_loader = MeshLoader(train_set, batch_size, shuffle=True,
+                              feature_swapper=swapper,
                               num_workers=data_config['number_of_workers'])
     validation_loader = MeshLoader(validation_set, batch_size, shuffle=True,
+                                   feature_swapper=swapper,
                                    num_workers=data_config['number_of_workers'])
-    test_loader = MeshLoader(test_set, batch_size, shuffle=False,
+    test_loader = MeshLoader(test_set, batch_size, shuffle=True,
+                             feature_swapper=swapper,
                              num_workers=data_config['number_of_workers'])
     return train_loader, validation_loader, test_loader, normalization_dict
 
 
 class MeshLoader(torch.utils.data.DataLoader):
-    def __init__(self, dataset, batch_size=1, shuffle=False, **kwargs):
+    def __init__(self, dataset, batch_size=1, shuffle=False,
+                 feature_swapper=None, **kwargs):
+        collater = MeshCollater(feature_swapper)
         super(MeshLoader, self).__init__(dataset, batch_size, shuffle,
-                                         collate_fn=MeshCollater(), **kwargs)
+                                         collate_fn=collater, **kwargs)
 
 
 class MeshCollater:
-    @staticmethod
-    def collate(data_list):
+    def __init__(self, feature_swapper=None):
+        self._swapper = feature_swapper
+
+    def __call__(self, data_list):
+        return self.collate(data_list)
+
+    def collate(self, data_list):
         if not isinstance(data_list[0], Data):
             raise TypeError(
                 f"DataLoader found invalid type: {type(data_list[0])}. "
@@ -89,10 +102,9 @@ class MeshCollater:
         for key in keys:
             attribute_list = [data[key] for data in data_list]
             batched_data[key] = default_collate(attribute_list)
+        if self._swapper is not None:
+            batched_data = self._swapper(batched_data)
         return batched_data
-
-    def __call__(self, data_list):
-        return self.collate(data_list)
 
 
 class MeshDataset(Dataset):
