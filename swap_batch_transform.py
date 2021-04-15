@@ -18,21 +18,24 @@ class SwapFeatures:
         new_batch = torch.zeros([batch_size ** 2, *batched_data.x.shape[1:]],
                                 device=batched_data.x.device,
                                 dtype=batched_data.x.dtype)
-        for i in range(batch_size):
-            for j in range(batch_size):
+        key = random.choice(self._zones_keys)
+        for j in range(batch_size):
+            for i in range(batch_size):
                 if i == j:
                     new_batch[i * batch_size + j, ::] = batched_data.x[i, ::]
                 else:
-                    key = random.choice(self._zones_keys)
                     vertices = batched_data.x.numpy()
                     new_batch[i * batch_size + j, ::] = self.swap(
                         vertices[i, ::], vertices[j, ::], key)
-        batched_data = Data(x=new_batch)
+        batched_data = Data(x=new_batch, swapped=key)
         return batched_data
 
     def swap(self, verts0, verts1, feature_key):
         feature_idxs = self._features_and_contours[feature_key]['feature']
         contour_idxs = self._features_and_contours[feature_key]['contour']
+
+        verts0 = verts0.copy()
+        verts1 = verts1.copy()
 
         feature_verts0 = verts0[feature_idxs]
         contour_verts0 = verts0[contour_idxs]
@@ -63,13 +66,15 @@ def _swap(contour_verts0, feature_verts0, contour_verts1, feature_verts1):
     feature_verts1 = to_cartesian(hom_feature_verts1)
 
     # deform feature0 on feature1
-    distances = compute_minimum_distances(feature_verts1, contour_verts0)
-    max_dist = max(distances)
-    displacement_weights = np.tanh(3 * (distances / max_dist))
-    displacement_weights = np.expand_dims(displacement_weights, axis=1)
-    displacement = feature_verts1 - feature_verts0
-    feature_verts_def = feature_verts0 + displacement * displacement_weights
-    return feature_verts_def
+    # distances = compute_minimum_distances(feature_verts1, contour_verts0)
+    # max_dist = max(distances)
+    # displacement_weights = np.tanh(3 * (distances / max_dist))
+    # displacement_weights = smooth_step(distances / max_dist, 0.1)
+    # displacement_weights = distances / max_dist
+    # displacement_weights = np.expand_dims(displacement_weights, axis=1)
+    # displacement = feature_verts1 - feature_verts0
+    # feature_verts_def = feature_verts0 + displacement * displacement_weights
+    return feature_verts1  # feature_verts_def
 
 
 @numba.njit
