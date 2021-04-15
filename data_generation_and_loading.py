@@ -12,6 +12,7 @@ from torch_geometric.data import Dataset, InMemoryDataset, Data
 
 from swap_batch_transform import SwapFeatures
 
+
 class DataGenerator:
     def __init__(self, uhm_path, data_dir='./data'):
         infile = open(uhm_path, 'rb')

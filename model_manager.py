@@ -3,6 +3,7 @@ import pickle
 import torch.nn
 import trimesh
 
+from torchvision.transforms import ToPILImage
 from torchvision.utils import make_grid
 from pytorch3d.structures import Meshes
 from pytorch3d.renderer.blending import hard_rgb_blend
@@ -234,7 +235,7 @@ class ModelManager(torch.nn.Module):
         errors_renders = self.render(out_meshes, vertex_errors,
                                      error_max_scale)
         log = torch.cat([gt_renders, out_renders, errors_renders], dim=-1)
-        log = make_grid(log, padding=10, pad_value=1, nrow=3)
+        log = make_grid(log, padding=10, pad_value=1, nrow=4)
         writer.add_image(tag=phase, global_step=epoch + 1, img_tensor=log)
 
     def _create_renderer(self, img_size=256):
@@ -280,6 +281,17 @@ class ModelManager(torch.nn.Module):
         images = self.renderer(meshes, cameras=cameras, lights=lights,
                                materials=materials).permute(0, 3, 1, 2)
         return images[:, :3, ::]
+
+    def render_and_show_batch(self, data, normalization_dict):
+        verts = data.x.to(self._rend_device)
+        if self._normalized_data:
+            mean_mesh = normalization_dict['mean'].to(self._rend_device)
+            std_mesh = normalization_dict['std'].to(self._rend_device)
+            verts = verts * std_mesh + mean_mesh
+        rend = self.render(verts)
+        grid = make_grid(rend, padding=10, pad_value=1, nrow=4)
+        img = ToPILImage()(grid)
+        img.show()
 
     def show_mesh(self, vertices, normalization_dict=None):
         vertices = torch.squeeze(vertices)
