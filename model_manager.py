@@ -57,7 +57,11 @@ class ModelManager(torch.nn.Module):
             lr=float(self._optimization_params['lr']),
             weight_decay=self._optimization_params['weight_decay'])
 
+        self._latent_regions = self._compute_latent_regions()
+
         self._losses = None
+        self._w_feature_cons_loss = float(
+            self._optimization_params['feature_consistency_weight'])
 
         self._rend_device = rendering_device if rendering_device else device
         self._default_shader = HardGouraudShader(
@@ -69,7 +73,11 @@ class ModelManager(torch.nn.Module):
 
     @property
     def loss_keys(self):
-        return ['reconstruction']
+        return ['reconstruction', 'feature_consistency', 'tot']
+
+    @property
+    def latent_regions(self):
+        return self._latent_regions
 
     def _precompute_transformations(self):
         storage_path = os.path.join(self._precomputed_storage_path,
@@ -127,6 +135,14 @@ class ModelManager(torch.nn.Module):
         spiral_indices_list = [s.to(self.device) for s in spiral_indices_list]
         return spiral_indices_list
 
+    def _compute_latent_regions(self):
+        region_names = list(self.template.feat_and_cont.keys())
+        latent_size = self._model_params['latent_size']
+        assert latent_size % len(region_names) == 0
+        region_size = latent_size // len(region_names)
+        return {k: [i * region_size, (i + 1) * region_size]
+                for i, k in enumerate(region_names)}
+
     def forward(self, data):
         return self._net(data.x)
 
@@ -162,13 +178,17 @@ class ModelManager(torch.nn.Module):
             self._optimizer.zero_grad()
 
         data = data.to(device)
-        reconstructed = self.forward(data)
+        reconstructed, z = self.forward(data)
         loss_recon = self._compute_mse_loss(reconstructed, data.x)
+        loss_f_consistency = self._compute_feature_consistency(z, data.swapped)
+        loss_tot = loss_recon + self._w_feature_cons_loss * loss_f_consistency
 
         if train:
-            loss_recon.backward()
+            loss_tot.backward()
             self._optimizer.step()
-        return {'reconstruction': loss_recon.item()}
+        return {'reconstruction': loss_recon.item(),
+                'feature_consistency': loss_f_consistency.item(),
+                'tot': loss_tot}
 
     @staticmethod
     def _compute_l1_loss(prediction, gt, reduction='mean'):
@@ -189,6 +209,39 @@ class ModelManager(torch.nn.Module):
     @staticmethod
     def _compute_kl_divergence_loss(mu, logvar):
         return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+
+    def _compute_feature_consistency(self, z, swapped_feature):
+        bs = self._optimization_params['batch_size']
+        eta = self._optimization_params['feature_consistency_eta']
+        latent_region = self._latent_regions[swapped_feature]
+        z_feature = z[:, latent_region[0]:latent_region[1]].view(bs, bs, -1)
+        z_else = torch.cat([z[:, :latent_region[0]],
+                            z[:, latent_region[1]:]], dim=1).view(bs, bs, -1)
+        triu_indices = torch.triu_indices(
+            z_feature.shape[0], z_feature.shape[0], 1)
+
+        lg = z_feature.unsqueeze(0) - z_feature.unsqueeze(1)
+        lg = lg[triu_indices[0], triu_indices[1], :, :].reshape(-1,
+                                                                lg.shape[-1])
+        lg = torch.sum(lg ** 2, dim=-1)
+
+        dg = z_feature.permute(1, 2, 0).unsqueeze(0) - \
+            z_feature.permute(1, 2, 0).unsqueeze(1)
+        dg = dg[triu_indices[0], triu_indices[1], :, :].permute(0, 2, 1)
+        dg = torch.sum(dg.reshape(-1, dg.shape[-1]) ** 2, dim=-1)
+
+        dr = z_else.unsqueeze(0) - z_else.unsqueeze(1)
+        dr = dr[triu_indices[0], triu_indices[1], :, :].reshape(-1,
+                                                                dr.shape[-1])
+        dr = torch.sum(dr ** 2, dim=-1)
+
+        lr = z_else.permute(1, 2, 0).unsqueeze(0) - \
+            z_else.permute(1, 2, 0).unsqueeze(1)
+        lr = lr[triu_indices[0], triu_indices[1], :, :].permute(0, 2, 1)
+        lr = torch.sum(lr.reshape(-1, lr.shape[-1]) ** 2, dim=-1)
+        zero = torch.tensor(0, device=z.device)
+        return torch.sum(torch.max(zero, lr - dr + eta)) + \
+            torch.sum(torch.max(zero, lg - dg + eta))
 
     def compute_vertex_errors(self, out_verts, gt_verts):
         vertex_errors = self._compute_mse_loss(
@@ -219,7 +272,7 @@ class ModelManager(torch.nn.Module):
     def log_images(self, in_data, writer, epoch, normalization_dict=None,
                    phase='train', error_max_scale=5):
         gt_meshes = in_data.x.to(self._rend_device)
-        out_meshes = self.forward(in_data.to(self.device))
+        out_meshes, _ = self.forward(in_data.to(self.device))
         out_meshes = out_meshes.to(self._rend_device)
 
         if self._normalized_data:

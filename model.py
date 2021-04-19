@@ -162,4 +162,4 @@ class AE(nn.Module):
     def forward(self, x):
         z = self.encode(x)
         out = self.decode(z)
-        return out
+        return out, z

@@ -14,6 +14,8 @@ optimization:
   batch_size: 4                                                                 # if swap_features=True, the resulting batch size will be batch_size^2
   lr: 1e-3
   weight_decay: 0
+  feature_consistency_weight: 1
+  feature_consistency_eta: 0.5
 
 model:
   sampling:
