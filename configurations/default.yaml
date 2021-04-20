@@ -15,7 +15,8 @@ optimization:
   lr: 1e-3
   weight_decay: 0
   feature_consistency_weight: 1
-  feature_consistency_eta: 0.5
+  feature_consistency_eta1: 0.5
+  feature_consistency_eta2: 5
 
 model:
   sampling:

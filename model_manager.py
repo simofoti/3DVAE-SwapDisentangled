@@ -212,7 +212,8 @@ class ModelManager(torch.nn.Module):
 
     def _compute_feature_consistency(self, z, swapped_feature):
         bs = self._optimization_params['batch_size']
-        eta = self._optimization_params['feature_consistency_eta']
+        eta1 = self._optimization_params['feature_consistency_eta1']
+        eta2 = self._optimization_params['feature_consistency_eta2']
         latent_region = self._latent_regions[swapped_feature]
         z_feature = z[:, latent_region[0]:latent_region[1]].view(bs, bs, -1)
         z_else = torch.cat([z[:, :latent_region[0]],
@@ -240,8 +241,8 @@ class ModelManager(torch.nn.Module):
         lr = lr[triu_indices[0], triu_indices[1], :, :].permute(0, 2, 1)
         lr = torch.sum(lr.reshape(-1, lr.shape[-1]) ** 2, dim=-1)
         zero = torch.tensor(0, device=z.device)
-        return torch.sum(torch.max(zero, lr - dr + eta)) + \
-            torch.sum(torch.max(zero, lg - dg + eta))
+        return torch.sum(torch.max(zero, lr - dr + eta2)) + \
+            torch.sum(torch.max(zero, lg - dg + eta1))
 
     def compute_vertex_errors(self, out_verts, gt_verts):
         vertex_errors = self._compute_mse_loss(
