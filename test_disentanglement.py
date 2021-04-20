@@ -7,7 +7,7 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 from torchvision.io import write_video
-from torchvision.utils import make_grid
+from torchvision.utils import make_grid, save_image
 
 import utils
 from data_generation_and_loading import get_data_loaders
@@ -78,10 +78,16 @@ write_video(os.path.join(output_directory, 'latent_exploration.mp4'),
             torch.cat(all_frames, dim=0).permute(0, 2, 3, 1) * 255, fps=4)
 
 grid_frames = []
+grid_nrows = 8
+if config['data']['swap_features']:
+    grid_nrows = config['model']['latent_size'] // len(manager.latent_regions)
 stacked_frames = torch.stack(all_frames)[:, :-2, ::]
 for i in range(stacked_frames.shape[1]):
     grid_frames.append(
-        make_grid(stacked_frames[:, i, ::], padding=10, pad_value=1))
+        make_grid(stacked_frames[:, i, ::], padding=10,
+                  pad_value=1, nrow=grid_nrows))
+save_image(grid_frames[-1],
+           os.path.join(output_directory, 'latent_exploration_tiled.png'))
 write_video(os.path.join(output_directory, 'latent_exploration_tiled.mp4'),
             torch.stack(grid_frames, dim=0).permute(0, 2, 3, 1) * 255, fps=1)
 

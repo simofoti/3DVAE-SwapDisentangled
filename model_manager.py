@@ -71,6 +71,11 @@ class ModelManager(torch.nn.Module):
             blend_params=BlendParams(background_color=[0, 0, 0]))
         self.renderer = self._create_renderer()
 
+        if configurations['data']['swap_features']:
+            self._out_grid_size = self._optimization_params['batch_size']
+        else:
+            self._out_grid_size = 4
+
     @property
     def loss_keys(self):
         return ['reconstruction', 'feature_consistency', 'tot']
@@ -289,7 +294,7 @@ class ModelManager(torch.nn.Module):
         errors_renders = self.render(out_meshes, vertex_errors,
                                      error_max_scale)
         log = torch.cat([gt_renders, out_renders, errors_renders], dim=-1)
-        log = make_grid(log, padding=10, pad_value=1, nrow=4)
+        log = make_grid(log, padding=10, pad_value=1, nrow=self._out_grid_size)
         writer.add_image(tag=phase, global_step=epoch + 1, img_tensor=log)
 
     def _create_renderer(self, img_size=256):
@@ -343,7 +348,8 @@ class ModelManager(torch.nn.Module):
             std_mesh = normalization_dict['std'].to(self._rend_device)
             verts = verts * std_mesh + mean_mesh
         rend = self.render(verts)
-        grid = make_grid(rend, padding=10, pad_value=1, nrow=4)
+        grid = make_grid(rend, padding=10, pad_value=1,
+                         nrow=self._out_grid_size)
         img = ToPILImage()(grid)
         img.show()
 
