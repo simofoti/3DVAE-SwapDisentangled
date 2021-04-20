@@ -76,6 +76,9 @@ class ModelManager(torch.nn.Module):
         else:
             self._out_grid_size = 4
 
+        bs = self._optimization_params['batch_size']
+        self._batch_diagonal_idx = [bs * i for i in range(bs)]
+
     @property
     def loss_keys(self):
         return ['reconstruction', 'feature_consistency', 'tot']
@@ -184,7 +187,9 @@ class ModelManager(torch.nn.Module):
 
         data = data.to(device)
         reconstructed, z = self.forward(data)
-        loss_recon = self._compute_mse_loss(reconstructed, data.x)
+        loss_recon = self._compute_mse_loss(
+            reconstructed[self._batch_diagonal_idx, ::],
+            data.x[self._batch_diagonal_idx, ::])
         loss_f_consistency = self._compute_feature_consistency(z, data.swapped)
         loss_tot = loss_recon + self._w_feature_cons_loss * loss_f_consistency
 
