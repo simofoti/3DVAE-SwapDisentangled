@@ -1,6 +1,7 @@
 import os
 import pickle
 import tqdm
+import trimesh
 import torch.nn
 
 import pandas as pd
@@ -22,7 +23,8 @@ class Tester:
     def __call__(self):
         self.set_renderings_size(512)
         self.per_variable_range_experiments()
-        self.random_generation(n_samples=16)
+        self.random_generation_and_rendering(n_samples=16)
+        self.random_generation_and_save(n_samples=16)
 
     def set_renderings_size(self, size):
         self._manager.renderer.rasterizer.raster_settings.image_size = size
@@ -143,10 +145,27 @@ class Tester:
         gen_verts = self._manager.generate(z.to(self._device)) * \
             self._norm_dict['std'].to(self._device) + \
             self._norm_dict['mean'].to(self._device)
+        return gen_verts
 
+    def random_generation_and_rendering(self, n_samples=16,
+                                        z_range_multiplier=1):
+        gen_verts = self.random_generation(n_samples, z_range_multiplier)
         renderings = self._manager.render(gen_verts).cpu()
         grid = make_grid(renderings, padding=10, pad_value=1)
         save_image(grid, os.path.join(self._out_dir, 'random_generation.png'))
+
+    def random_generation_and_save(self, n_samples=16, z_range_multiplier=1):
+        out_mesh_dir = os.path.join(self._out_dir, 'random_meshes')
+        if not os.path.isdir(out_mesh_dir):
+            os.mkdir(out_mesh_dir)
+
+        gen_verts = self.random_generation(n_samples, z_range_multiplier)
+
+        for i in range(gen_verts.shape[0]):
+            mesh = trimesh.Trimesh(
+                gen_verts[i, ::].cpu().detach().numpy(),
+                self._manager.template.face.t().cpu().numpy())
+            mesh.export(os.path.join(out_mesh_dir, str(i) + '.ply'))
 
 
 if __name__ == '__main__':
@@ -186,4 +205,5 @@ if __name__ == '__main__':
                     output_directory, configurations)
     tester.set_renderings_size(512)
     tester.per_variable_range_experiments()
-    tester.random_generation(n_samples=16)
+    tester.random_generation_and_rendering(n_samples=16)
+    tester.random_generation_and_save(n_samples=16)
