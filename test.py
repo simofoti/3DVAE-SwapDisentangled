@@ -19,6 +19,11 @@ class Tester:
         self._config = config
         self.latent_stats = self.compute_latent_stats(data_loader)
 
+    def __call__(self):
+        self.set_renderings_size(512)
+        self.per_variable_range_experiments()
+        self.random_generation(n_samples=16)
+
     def set_renderings_size(self, size):
         self._manager.renderer.rasterizer.raster_settings.image_size = size
 

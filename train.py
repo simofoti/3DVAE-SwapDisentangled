@@ -8,6 +8,7 @@ from torch.utils.tensorboard import SummaryWriter
 import utils
 from data_generation_and_loading import DataGenerator, get_data_loaders
 from model_manager import ModelManager
+from test import Tester
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--config', type=str, default='configurations/default.yaml',
@@ -68,3 +69,5 @@ for epoch in tqdm.tqdm(range(start_epoch, config['optimization']['epochs'])):
                            normalization_dict, 'validation', error_max_scale=2)
     if (epoch + 1) % config['logging_frequency']['save_weights'] == 0:
         manager.save_weights(checkpoint_dir, epoch)
+
+Tester(manager, normalization_dict, train_loader, output_directory, config)
