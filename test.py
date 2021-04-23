@@ -126,6 +126,23 @@ class Tester:
         grid.map(plt.plot, "z_var", "mean_dist", marker="o")
         plt.savefig(os.path.join(self._out_dir, 'latent_exploration.png'))
 
+    def random_generation(self, n_samples=16, z_range_multiplier=1):
+        z_means = self.latent_stats['means']
+        z_mins = self.latent_stats['mins'] * z_range_multiplier
+        z_maxs = self.latent_stats['maxs'] * z_range_multiplier
+
+        uniform = torch.rand([n_samples, z_means.shape[0]],
+                             device=z_means.device)
+        z = uniform * (z_maxs - z_mins) + z_mins
+
+        gen_verts = self._manager.generate(z.to(self._device)) * \
+            self._norm_dict['std'].to(self._device) + \
+            self._norm_dict['mean'].to(self._device)
+
+        renderings = self._manager.render(gen_verts).cpu()
+        grid = make_grid(renderings, padding=10, pad_value=1)
+        save_image(grid, os.path.join(self._out_dir, 'random_generation.png'))
+
 
 if __name__ == '__main__':
     import argparse
@@ -164,3 +181,4 @@ if __name__ == '__main__':
                     output_directory, configurations)
     tester.set_renderings_size(512)
     tester.per_variable_range_experiments()
+    tester.random_generation(n_samples=16)
