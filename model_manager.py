@@ -77,7 +77,7 @@ class ModelManager(torch.nn.Module):
             self._out_grid_size = 4
 
         bs = self._optimization_params['batch_size']
-        self._batch_diagonal_idx = [bs * i for i in range(bs)]
+        self._batch_diagonal_idx = [(bs + 1) * i for i in range(bs)]
 
     @property
     def loss_keys(self):
