@@ -70,7 +70,7 @@ def get_data_loaders(config, template=None):
     validation_loader = MeshLoader(validation_set, batch_size, shuffle=True,
                                    feature_swapper=swapper,
                                    num_workers=data_config['number_of_workers'])
-    test_loader = MeshLoader(test_set, batch_size, shuffle=True,
+    test_loader = MeshLoader(test_set, batch_size, shuffle=False,
                              feature_swapper=swapper,
                              num_workers=data_config['number_of_workers'])
     return train_loader, validation_loader, test_loader, normalization_dict
