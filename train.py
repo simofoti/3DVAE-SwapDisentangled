@@ -50,6 +50,8 @@ train_loader, validation_loader, test_loader, normalization_dict = \
 train_visualization_batch = next(iter(train_loader))
 validation_visualization_batch = next(iter(validation_loader))
 
+# manager.render_and_show_batch(train_visualization_batch, normalization_dict)
+
 if opts.resume:
     start_epoch = manager.resume(checkpoint_dir)
 else:
@@ -70,4 +72,5 @@ for epoch in tqdm.tqdm(range(start_epoch, config['optimization']['epochs'])):
     if (epoch + 1) % config['logging_frequency']['save_weights'] == 0:
         manager.save_weights(checkpoint_dir, epoch)
 
-Tester(manager, normalization_dict, train_loader, output_directory, config)
+Tester(manager, normalization_dict, train_loader, test_loader,
+       output_directory, config)()
