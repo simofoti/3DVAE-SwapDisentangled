@@ -243,7 +243,7 @@ class Tester:
                     previous_verts_batch, current_verts_batch)
                 mean_distances.append(torch.mean(verts_batch_distances, dim=1))
             previous_verts_batch = current_verts_batch
-        return torch.mean(torch.cat(mean_distances, dim=0))
+        return torch.mean(torch.cat(mean_distances, dim=0)).item()
 
     def compute_diversity(self, n_samples=10000):
         print('Computing generative model diversity')
@@ -254,7 +254,7 @@ class Tester:
                 self.random_generation(samples_per_batch),
                 self.random_generation(samples_per_batch))
             mean_distances.append(torch.mean(verts_batch_distances, dim=1))
-        return torch.mean(torch.cat(mean_distances, dim=0))
+        return torch.mean(torch.cat(mean_distances, dim=0)).item()
 
     def compute_regional_diversity(self, n_samples=1000):
         print('Computing generative model regional diversity')
@@ -317,7 +317,7 @@ class Tester:
                     x, sample.expand(x.shape[0], -1, -1))
                 mean_distances.append(torch.mean(v_dist, dim=1))
             min_distances.append(torch.min(torch.cat(mean_distances, dim=0)))
-        return torch.mean(torch.stack(min_distances))
+        return torch.mean(torch.stack(min_distances)).item()
 
     def latent_swapping(self, v_batch=None):
         if v_batch is None:
