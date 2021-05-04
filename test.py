@@ -19,6 +19,7 @@ class Tester:
         self._manager = model_manager
         self._device = model_manager.device
         self._norm_dict = norm_dict
+        self._normalized_data = config['data']['normalize_data']
         self._out_dir = out_dir
         self._config = config
         self._train_loader = train_load
@@ -30,7 +31,8 @@ class Tester:
         self.set_rendering_background_color([1, 1, 1])
 
         # Qualitative evaluations
-        self.latent_swapping(next(iter(self._test_loader)).x)
+        if self._config['data']['swap_features']:
+            self.latent_swapping(next(iter(self._test_loader)).x)
         self.per_variable_range_experiments()
         self.random_generation_and_rendering(n_samples=16)
         self.random_generation_and_save(n_samples=16)
@@ -39,7 +41,7 @@ class Tester:
         recon_errors = self.reconstruction_errors(self._test_loader)
         train_set_diversity = self.compute_diversity_train_set()
         diversity = self.compute_diversity()
-        regional_diversity = self.compute_regional_diversity()
+        regional_diversity = None  # self.compute_regional_diversity()
         specificity = self.compute_specificity()
         metrics = {'recon_errors': recon_errors,
                    'train_set_diversity': train_set_diversity,
@@ -50,6 +52,11 @@ class Tester:
         outfile_path = os.path.join(self._out_dir, 'eval_metrics.json')
         with open(outfile_path, 'w') as outfile:
             json.dump(metrics, outfile)
+
+    def _unnormalize_verts(self, verts, dev=None):
+        d = self._device if dev is None else dev
+        return verts * self._norm_dict['std'].to(d) + \
+            self._norm_dict['mean'].to(d)
 
     def set_renderings_size(self, size):
         self._manager.renderer.rasterizer.raster_settings.image_size = size
@@ -106,9 +113,11 @@ class Tester:
             z = z_means.repeat(n_steps, 1)
             z[:, i] = torch.linspace(
                 z_mins[i], z_maxs[i], n_steps).to(self._device)
-            gen_verts = self._manager.generate(z.to(self._device)) * \
-                self._norm_dict['std'].to(self._device) + \
-                self._norm_dict['mean'].to(self._device)
+
+            gen_verts = self._manager.generate(z.to(self._device))
+
+            if self._normalized_data:
+                gen_verts = self._unnormalize_verts(gen_verts)
 
             differences_from_first = self._manager.compute_vertex_errors(
                 gen_verts, gen_verts[0].expand(gen_verts.shape[0], -1, -1))
@@ -175,10 +184,9 @@ class Tester:
 
     def random_generation(self, n_samples=16, z_range_multiplier=1):
         z = self.random_latent(n_samples, z_range_multiplier)
-
-        gen_verts = self._manager.generate(z.to(self._device)) * \
-            self._norm_dict['std'].to(self._device) + \
-            self._norm_dict['mean'].to(self._device)
+        gen_verts = self._manager.generate(z.to(self._device))
+        if self._normalized_data:
+            gen_verts = self._unnormalize_verts(gen_verts)
         return gen_verts
 
     def random_generation_and_rendering(self, n_samples=16,
@@ -211,13 +219,14 @@ class Tester:
             if self._config['data']['swap_features']:
                 data.x = data.x[self._manager._batch_diagonal_idx, ::]
             data = data.to(self._device)
+            gt = data.x
 
             recon, _ = self._manager.forward(data)
 
-            gt = data.x * self._norm_dict['std'].to(self._device) + \
-                self._norm_dict['mean'].to(self._device)
-            recon = recon * self._norm_dict['std'].to(self._device) + \
-                self._norm_dict['mean'].to(self._device)
+            if self._normalized_data:
+                gt = self._unnormalize_verts(gt)
+                recon = self._unnormalize_verts(recon)
+
             errors = self._manager.compute_vertex_errors(recon, gt)
             data_errors.append(torch.mean(errors.detach(), dim=1))
         data_errors = torch.cat(data_errors, dim=0)
@@ -235,8 +244,10 @@ class Tester:
             else:
                 x = data.x
 
-            current_verts_batch = x * self._norm_dict['std'].to(x.device) + \
-                self._norm_dict['mean'].to(x.device)
+            current_verts_batch = x
+            if self._normalized_data:
+                current_verts_batch = self._unnormalize_verts(
+                    current_verts_batch, x.device)
 
             if previous_verts_batch is not None:
                 verts_batch_distances = self._manager.compute_vertex_errors(
@@ -272,12 +283,12 @@ class Tester:
                 z_0[z_region[0]:z_region[1]] = z_rand_0[z_region[0]:z_region[1]]
                 z_1[z_region[0]:z_region[1]] = z_rand_1[z_region[0]:z_region[1]]
 
-                x_0 = self._manager.generate(z_0.to(self._device)) * \
-                    self._norm_dict['std'].to(self._device) + \
-                    self._norm_dict['mean'].to(self._device)
-                x_1 = self._manager.generate(z_1.to(self._device)) * \
-                    self._norm_dict['std'].to(self._device) + \
-                    self._norm_dict['mean'].to(self._device)
+                x_0 = self._manager.generate(z_0.to(self._device))
+                x_1 = self._manager.generate(z_1.to(self._device))
+
+                if self._normalized_data:
+                    x_0 = self._unnormalize_verts(x_0)
+                    x_1 = self._unnormalize_verts(x_1)
 
                 verts_distances = self._manager.compute_vertex_errors(x_0, x_1)
                 verts_region_idx = \
@@ -308,11 +319,12 @@ class Tester:
                     x = data.x
 
                 x = x.to(self._device)
-                x = x * self._norm_dict['std'].to(self._device) + \
-                    self._norm_dict['mean'].to(self._device)
-                sample = self.random_generation(1) * \
-                    self._norm_dict['std'].to(self._device) + \
-                    self._norm_dict['mean'].to(self._device)
+                sample = self.random_generation(1)
+
+                if self._normalized_data:
+                    x = self._unnormalize_verts(x)
+                    sample = self._unnormalize_verts(sample)
+
                 v_dist = self._manager.compute_vertex_errors(
                     x, sample.expand(x.shape[0], -1, -1))
                 mean_distances.append(torch.mean(v_dist, dim=1))
@@ -339,8 +351,9 @@ class Tester:
             swapped_verts.append(self._manager.generate(z_swap))
 
         all_verts = torch.cat([v_batch, torch.cat(swapped_verts, dim=0)], dim=0)
-        all_verts = all_verts * self._norm_dict['std'].to(self._device) + \
-            self._norm_dict['mean'].to(self._device)
+
+        if self._normalized_data:
+            all_verts = self._unnormalize_verts(all_verts)
 
         out_mesh_dir = os.path.join(self._out_dir, 'latent_swapping')
         if not os.path.isdir(out_mesh_dir):
@@ -377,7 +390,7 @@ if __name__ == '__main__':
                         help="outputs path")
     opts = parser.parse_args()
     configurations = utils.get_config(opts.config)
-    model_name = '033_dummy'  # opts.id
+    model_name = opts.id
 
     output_directory = os.path.join(opts.output_path + "/outputs", model_name)
     checkpoint_dir = os.path.join(output_directory, 'checkpoints')

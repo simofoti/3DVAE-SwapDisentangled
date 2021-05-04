@@ -3,6 +3,7 @@ import pickle
 import torch.nn
 import trimesh
 
+from torchvision.transforms import ToPILImage
 from torchvision.utils import make_grid
 from pytorch3d.structures import Meshes
 from pytorch3d.renderer.blending import hard_rgb_blend
@@ -56,7 +57,13 @@ class ModelManager(torch.nn.Module):
             lr=float(self._optimization_params['lr']),
             weight_decay=self._optimization_params['weight_decay'])
 
+        self._latent_regions = self._compute_latent_regions()
+
         self._losses = None
+        self._w_feature_cons_loss = float(
+            self._optimization_params['feature_consistency_weight'])
+        self._w_laplacian_loss = float(
+            self._optimization_params['laplacian_weight'])
 
         self._rend_device = rendering_device if rendering_device else device
         self._default_shader = HardGouraudShader(
@@ -66,9 +73,22 @@ class ModelManager(torch.nn.Module):
             blend_params=BlendParams(background_color=[0, 0, 0]))
         self.renderer = self._create_renderer()
 
+        self._swap_features = configurations['data']['swap_features']
+        if self._swap_features:
+            self._out_grid_size = self._optimization_params['batch_size']
+        else:
+            self._out_grid_size = 4
+
+        bs = self._optimization_params['batch_size']
+        self._batch_diagonal_idx = [(bs + 1) * i for i in range(bs)]
+
     @property
     def loss_keys(self):
-        return ['reconstruction']
+        return ['reconstruction', 'feature_consistency', 'laplacian', 'tot']
+
+    @property
+    def latent_regions(self):
+        return self._latent_regions
 
     def _precompute_transformations(self):
         storage_path = os.path.join(self._precomputed_storage_path,
@@ -126,6 +146,14 @@ class ModelManager(torch.nn.Module):
         spiral_indices_list = [s.to(self.device) for s in spiral_indices_list]
         return spiral_indices_list
 
+    def _compute_latent_regions(self):
+        region_names = list(self.template.feat_and_cont.keys())
+        latent_size = self._model_params['latent_size']
+        assert latent_size % len(region_names) == 0
+        region_size = latent_size // len(region_names)
+        return {k: [i * region_size, (i + 1) * region_size]
+                for i, k in enumerate(region_names)}
+
     def forward(self, data):
         return self._net(data.x)
 
@@ -161,13 +189,26 @@ class ModelManager(torch.nn.Module):
             self._optimizer.zero_grad()
 
         data = data.to(device)
-        reconstructed = self.forward(data)
+        reconstructed, z = self.forward(data)
         loss_recon = self._compute_mse_loss(reconstructed, data.x)
 
+        if self._swap_features:
+            loss_f_cons = self._compute_feature_consistency(z, data.swapped)
+        else:
+            loss_f_cons = torch.tensor(0, device=device)
+
+        loss_laplacian = self._compute_laplacian_regularizer(reconstructed)
+        loss_tot = loss_recon + \
+            self._w_feature_cons_loss * loss_f_cons + \
+            self._w_laplacian_loss * loss_laplacian
+
         if train:
-            loss_recon.backward()
+            loss_tot.backward()
             self._optimizer.step()
-        return {'reconstruction': loss_recon.item()}
+        return {'reconstruction': loss_recon.item(),
+                'feature_consistency': loss_f_cons.item(),
+                'laplacian': loss_laplacian.item(),
+                'tot': loss_tot}
 
     @staticmethod
     def _compute_l1_loss(prediction, gt, reduction='mean'):
@@ -177,17 +218,52 @@ class ModelManager(torch.nn.Module):
     def _compute_mse_loss(prediction, gt, reduction='mean'):
         return torch.nn.MSELoss(reduction=reduction)(prediction, gt)
 
-    def _compute_laplacian_loss(self, prediction, gt, reduction='mean'):
+    def _compute_laplacian_regularizer(self, prediction):
+        bs = prediction.shape[0]
+        n_verts = prediction.shape[1]
         laplacian = self.template.laplacian.to(prediction.device)
-        prediction_laplacian = utils.batch_mm(laplacian, prediction[:, :, :3])
-        gt_laplacian = utils.batch_mm(laplacian, gt[:, :, :3])
-        loss = torch.nn.L1Loss(reduction=reduction)(prediction_laplacian,
-                                                    gt_laplacian)
-        return loss
+        prediction_laplacian = utils.batch_mm(laplacian, prediction)
+        loss = prediction_laplacian.norm(dim=-1) / n_verts
+        return loss.sum() / bs
 
     @staticmethod
     def _compute_kl_divergence_loss(mu, logvar):
         return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+
+    def _compute_feature_consistency(self, z, swapped_feature):
+        bs = self._optimization_params['batch_size']
+        eta1 = self._optimization_params['feature_consistency_eta1']
+        eta2 = self._optimization_params['feature_consistency_eta2']
+        latent_region = self._latent_regions[swapped_feature]
+        z_feature = z[:, latent_region[0]:latent_region[1]].view(bs, bs, -1)
+        z_else = torch.cat([z[:, :latent_region[0]],
+                            z[:, latent_region[1]:]], dim=1).view(bs, bs, -1)
+        triu_indices = torch.triu_indices(
+            z_feature.shape[0], z_feature.shape[0], 1)
+
+        lg = z_feature.unsqueeze(0) - z_feature.unsqueeze(1)
+        lg = lg[triu_indices[0], triu_indices[1], :, :].reshape(-1,
+                                                                lg.shape[-1])
+        lg = torch.sum(lg ** 2, dim=-1)
+
+        dg = z_feature.permute(1, 2, 0).unsqueeze(0) - \
+            z_feature.permute(1, 2, 0).unsqueeze(1)
+        dg = dg[triu_indices[0], triu_indices[1], :, :].permute(0, 2, 1)
+        dg = torch.sum(dg.reshape(-1, dg.shape[-1]) ** 2, dim=-1)
+
+        dr = z_else.unsqueeze(0) - z_else.unsqueeze(1)
+        dr = dr[triu_indices[0], triu_indices[1], :, :].reshape(-1,
+                                                                dr.shape[-1])
+        dr = torch.sum(dr ** 2, dim=-1)
+
+        lr = z_else.permute(1, 2, 0).unsqueeze(0) - \
+            z_else.permute(1, 2, 0).unsqueeze(1)
+        lr = lr[triu_indices[0], triu_indices[1], :, :].permute(0, 2, 1)
+        lr = torch.sum(lr.reshape(-1, lr.shape[-1]) ** 2, dim=-1)
+        zero = torch.tensor(0, device=z.device)
+        return (1 / (bs ** 3 - bs ** 2)) * \
+               (torch.sum(torch.max(zero, lr - dr + eta2)) +
+                torch.sum(torch.max(zero, lg - dg + eta1)))
 
     def compute_vertex_errors(self, out_verts, gt_verts):
         vertex_errors = self._compute_mse_loss(
@@ -218,7 +294,7 @@ class ModelManager(torch.nn.Module):
     def log_images(self, in_data, writer, epoch, normalization_dict=None,
                    phase='train', error_max_scale=5):
         gt_meshes = in_data.x.to(self._rend_device)
-        out_meshes = self.forward(in_data.to(self.device))
+        out_meshes, _ = self.forward(in_data.to(self.device))
         out_meshes = out_meshes.to(self._rend_device)
 
         if self._normalized_data:
@@ -234,7 +310,7 @@ class ModelManager(torch.nn.Module):
         errors_renders = self.render(out_meshes, vertex_errors,
                                      error_max_scale)
         log = torch.cat([gt_renders, out_renders, errors_renders], dim=-1)
-        log = make_grid(log, padding=10, pad_value=1, nrow=3)
+        log = make_grid(log, padding=10, pad_value=1, nrow=self._out_grid_size)
         writer.add_image(tag=phase, global_step=epoch + 1, img_tensor=log)
 
     def _create_renderer(self, img_size=256):
@@ -280,6 +356,18 @@ class ModelManager(torch.nn.Module):
         images = self.renderer(meshes, cameras=cameras, lights=lights,
                                materials=materials).permute(0, 3, 1, 2)
         return images[:, :3, ::]
+
+    def render_and_show_batch(self, data, normalization_dict):
+        verts = data.x.to(self._rend_device)
+        if self._normalized_data:
+            mean_mesh = normalization_dict['mean'].to(self._rend_device)
+            std_mesh = normalization_dict['std'].to(self._rend_device)
+            verts = verts * std_mesh + mean_mesh
+        rend = self.render(verts)
+        grid = make_grid(rend, padding=10, pad_value=1,
+                         nrow=self._out_grid_size)
+        img = ToPILImage()(grid)
+        img.show()
 
     def show_mesh(self, vertices, normalization_dict=None):
         vertices = torch.squeeze(vertices)

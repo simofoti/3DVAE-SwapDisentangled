@@ -7,12 +7,17 @@ data:
   std_pca_latent: 1                                                             # for data generation, 1 to sample from correct distribution, > 1 exaggerate face shapes
   number_of_meshes: 10000                                                       # for data generation, > 0 if you want to generate data
   number_of_workers: 8
+  swap_features: True                                                           # if True, the resulting batch size will be batch_size^2
 
 optimization:
-  epochs: 100
-  batch_size: 8
-  lr: 1e-3
+  epochs: 40
+  batch_size: 4                                                                 # if swap_features=True, the resulting batch size will be batch_size^2
+  lr: 1e-4
   weight_decay: 0
+  laplacian_weight: 1
+  feature_consistency_weight: 4.8
+  feature_consistency_eta1: 0.5
+  feature_consistency_eta2: 0.5
 
 model:
   sampling:
@@ -23,8 +28,8 @@ model:
     dilation: [1, 1, 1, 1]                                                      # spiral dilation for each convolution. Delete precomputed file if changed.
   in_channels: 3                                                                # number of input vertex features. Most likely 3 (x, y, z)
   out_channels: [32, 32, 32, 64]                                                # channels of intermediate layers
-  latent_size: 16                                                               # size of the latent vector
+  latent_size: 60                                                               # size of the latent vector
 
 logging_frequency:
-  tb_renderings: 10
-  save_weights: 25
+  tb_renderings: 5
+  save_weights: 20

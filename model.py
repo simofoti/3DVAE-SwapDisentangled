@@ -143,7 +143,7 @@ class AE(nn.Module):
             else:
                 x = x.view(-1, layer.weight.size(1))
                 x = layer(x)
-                x = torch.sigmoid(x)
+                # x = torch.sigmoid(x)
         return x
 
     def decode(self, x):
@@ -162,4 +162,4 @@ class AE(nn.Module):
     def forward(self, x):
         z = self.encode(x)
         out = self.decode(z)
-        return out
+        return out, z
