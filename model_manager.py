@@ -73,7 +73,8 @@ class ModelManager(torch.nn.Module):
             blend_params=BlendParams(background_color=[0, 0, 0]))
         self.renderer = self._create_renderer()
 
-        if configurations['data']['swap_features']:
+        self._swap_features = configurations['data']['swap_features']
+        if self._swap_features:
             self._out_grid_size = self._optimization_params['batch_size']
         else:
             self._out_grid_size = 4
@@ -190,17 +191,22 @@ class ModelManager(torch.nn.Module):
         data = data.to(device)
         reconstructed, z = self.forward(data)
         loss_recon = self._compute_mse_loss(reconstructed, data.x)
-        loss_f_consistency = self._compute_feature_consistency(z, data.swapped)
+
+        if self._swap_features:
+            loss_f_cons = self._compute_feature_consistency(z, data.swapped)
+        else:
+            loss_f_cons = torch.tensor(0, device=device)
+
         loss_laplacian = self._compute_laplacian_regularizer(reconstructed)
         loss_tot = loss_recon + \
-            self._w_feature_cons_loss * loss_f_consistency + \
+            self._w_feature_cons_loss * loss_f_cons + \
             self._w_laplacian_loss * loss_laplacian
 
         if train:
             loss_tot.backward()
             self._optimizer.step()
         return {'reconstruction': loss_recon.item(),
-                'feature_consistency': loss_f_consistency.item(),
+                'feature_consistency': loss_f_cons.item(),
                 'laplacian': loss_laplacian.item(),
                 'tot': loss_tot}
 

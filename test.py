@@ -31,7 +31,8 @@ class Tester:
         self.set_rendering_background_color([1, 1, 1])
 
         # Qualitative evaluations
-        self.latent_swapping(next(iter(self._test_loader)).x)
+        if self._config['data']['swap_features']:
+            self.latent_swapping(next(iter(self._test_loader)).x)
         self.per_variable_range_experiments()
         self.random_generation_and_rendering(n_samples=16)
         self.random_generation_and_save(n_samples=16)
@@ -40,7 +41,7 @@ class Tester:
         recon_errors = self.reconstruction_errors(self._test_loader)
         train_set_diversity = self.compute_diversity_train_set()
         diversity = self.compute_diversity()
-        regional_diversity = self.compute_regional_diversity()
+        regional_diversity = None  # self.compute_regional_diversity()
         specificity = self.compute_specificity()
         metrics = {'recon_errors': recon_errors,
                    'train_set_diversity': train_set_diversity,
