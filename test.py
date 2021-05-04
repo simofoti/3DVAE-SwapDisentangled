@@ -377,7 +377,7 @@ if __name__ == '__main__':
                         help="outputs path")
     opts = parser.parse_args()
     configurations = utils.get_config(opts.config)
-    model_name = '033_dummy'  # opts.id
+    model_name = opts.id
 
     output_directory = os.path.join(opts.output_path + "/outputs", model_name)
     checkpoint_dir = os.path.join(output_directory, 'checkpoints')

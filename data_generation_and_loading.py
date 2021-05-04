@@ -65,13 +65,13 @@ def get_data_loaders(config, template=None):
     swapper = SwapFeatures(template) if data_config['swap_features'] else None
 
     train_loader = MeshLoader(train_set, batch_size, shuffle=True,
-                              feature_swapper=swapper,
+                              drop_last=True, feature_swapper=swapper,
                               num_workers=data_config['number_of_workers'])
     validation_loader = MeshLoader(validation_set, batch_size, shuffle=True,
-                                   feature_swapper=swapper,
+                                   drop_last=True, feature_swapper=swapper,
                                    num_workers=data_config['number_of_workers'])
     test_loader = MeshLoader(test_set, batch_size, shuffle=False,
-                             feature_swapper=swapper,
+                             drop_last=True, feature_swapper=swapper,
                              num_workers=data_config['number_of_workers'])
     return train_loader, validation_loader, test_loader, normalization_dict
 
