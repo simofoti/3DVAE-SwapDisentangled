@@ -14,6 +14,7 @@ optimization:
   batch_size: 4                                                                 # if swap_features=True, the resulting batch size will be batch_size^2
   lr: 1e-3
   weight_decay: 0
+  laplacian_weight: 1
   feature_consistency_weight: 1
   feature_consistency_eta1: 0.5
   feature_consistency_eta2: 5

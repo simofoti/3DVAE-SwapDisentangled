@@ -10,6 +10,7 @@ import networkx as nx
 import numpy as np
 from collections import Counter
 from torch_geometric.data import Data
+from torch_geometric.utils import get_laplacian
 
 
 def get_config(config):
@@ -36,6 +37,8 @@ def load_template(mesh_path):
     data = Data(pos=mesh_verts, face=face, colors=mesh_colors,
                 feat_and_cont=feat_and_cont)
     data = torch_geometric.transforms.FaceToEdge(False)(data)
+    data.laplacian = torch.sparse_coo_tensor(
+        *get_laplacian(data.edge_index, normalization='rw'))
     return data
 
 

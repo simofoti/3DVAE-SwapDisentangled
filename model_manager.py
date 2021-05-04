@@ -62,6 +62,8 @@ class ModelManager(torch.nn.Module):
         self._losses = None
         self._w_feature_cons_loss = float(
             self._optimization_params['feature_consistency_weight'])
+        self._w_laplacian_loss = float(
+            self._optimization_params['laplacian_weight'])
 
         self._rend_device = rendering_device if rendering_device else device
         self._default_shader = HardGouraudShader(
@@ -81,7 +83,7 @@ class ModelManager(torch.nn.Module):
 
     @property
     def loss_keys(self):
-        return ['reconstruction', 'feature_consistency', 'tot']
+        return ['reconstruction', 'feature_consistency', 'laplacian', 'tot']
 
     @property
     def latent_regions(self):
@@ -187,17 +189,19 @@ class ModelManager(torch.nn.Module):
 
         data = data.to(device)
         reconstructed, z = self.forward(data)
-        loss_recon = self._compute_mse_loss(
-            reconstructed[self._batch_diagonal_idx, ::],
-            data.x[self._batch_diagonal_idx, ::])
+        loss_recon = self._compute_mse_loss(reconstructed, data.x)
         loss_f_consistency = self._compute_feature_consistency(z, data.swapped)
-        loss_tot = loss_recon + self._w_feature_cons_loss * loss_f_consistency
+        loss_laplacian = self._compute_laplacian_regularizer(reconstructed)
+        loss_tot = loss_recon + \
+            self._w_feature_cons_loss * loss_f_consistency + \
+            self._w_laplacian_loss * loss_laplacian
 
         if train:
             loss_tot.backward()
             self._optimizer.step()
         return {'reconstruction': loss_recon.item(),
                 'feature_consistency': loss_f_consistency.item(),
+                'laplacian': loss_laplacian.item(),
                 'tot': loss_tot}
 
     @staticmethod
@@ -208,13 +212,13 @@ class ModelManager(torch.nn.Module):
     def _compute_mse_loss(prediction, gt, reduction='mean'):
         return torch.nn.MSELoss(reduction=reduction)(prediction, gt)
 
-    def _compute_laplacian_loss(self, prediction, gt, reduction='mean'):
+    def _compute_laplacian_regularizer(self, prediction):
+        bs = prediction.shape[0]
+        n_verts = prediction.shape[1]
         laplacian = self.template.laplacian.to(prediction.device)
-        prediction_laplacian = utils.batch_mm(laplacian, prediction[:, :, :3])
-        gt_laplacian = utils.batch_mm(laplacian, gt[:, :, :3])
-        loss = torch.nn.L1Loss(reduction=reduction)(prediction_laplacian,
-                                                    gt_laplacian)
-        return loss
+        prediction_laplacian = utils.batch_mm(laplacian, prediction)
+        loss = prediction_laplacian.norm(dim=-1) / n_verts
+        return loss.sum() / bs
 
     @staticmethod
     def _compute_kl_divergence_loss(mu, logvar):
