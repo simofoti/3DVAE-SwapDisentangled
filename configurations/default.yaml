@@ -10,14 +10,14 @@ data:
   swap_features: True                                                           # if True, the resulting batch size will be batch_size^2
 
 optimization:
-  epochs: 100
+  epochs: 40
   batch_size: 4                                                                 # if swap_features=True, the resulting batch size will be batch_size^2
-  lr: 1e-3
+  lr: 1e-4
   weight_decay: 0
   laplacian_weight: 1
-  feature_consistency_weight: 1
+  feature_consistency_weight: 4.8
   feature_consistency_eta1: 0.5
-  feature_consistency_eta2: 5
+  feature_consistency_eta2: 0.5
 
 model:
   sampling:
@@ -31,5 +31,5 @@ model:
   latent_size: 60                                                               # size of the latent vector
 
 logging_frequency:
-  tb_renderings: 10
-  save_weights: 25
+  tb_renderings: 5
+  save_weights: 20

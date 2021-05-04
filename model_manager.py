@@ -255,8 +255,9 @@ class ModelManager(torch.nn.Module):
         lr = lr[triu_indices[0], triu_indices[1], :, :].permute(0, 2, 1)
         lr = torch.sum(lr.reshape(-1, lr.shape[-1]) ** 2, dim=-1)
         zero = torch.tensor(0, device=z.device)
-        return torch.sum(torch.max(zero, lr - dr + eta2)) + \
-            torch.sum(torch.max(zero, lg - dg + eta1))
+        return (1 / (bs ** 3 - bs ** 2)) * \
+               (torch.sum(torch.max(zero, lr - dr + eta2)) +
+                torch.sum(torch.max(zero, lg - dg + eta1)))
 
     def compute_vertex_errors(self, out_verts, gt_verts):
         vertex_errors = self._compute_mse_loss(
