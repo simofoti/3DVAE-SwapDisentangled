@@ -7,6 +7,7 @@ import torch
 
 import numpy as np
 
+from abc import abstractmethod
 from torch.utils.data.dataloader import default_collate
 from torch_geometric.data import Dataset, InMemoryDataset, Data
 
@@ -14,27 +15,9 @@ from swap_batch_transform import SwapFeatures
 
 
 class DataGenerator:
-    def __init__(self, uhm_path, data_dir='./data'):
-        infile = open(uhm_path, 'rb')
-        uhm_dict = pickle.load(infile)
-        infile.close()
-
+    def __init__(self, model_dir, data_dir='./data'):
+        self._model_dir = model_dir
         self._data_dir = data_dir
-        self._components = uhm_dict['Eigenvectors'].shape[1]
-        self._mu = uhm_dict['Mean']
-        self._eigenvectors = uhm_dict['Eigenvectors']
-        self._eigenvalues = uhm_dict['EigenValues']
-
-    def generate_random_face(self, weight):
-        w = weight * np.random.normal(size=self._components) * \
-            self._eigenvalues ** 0.5
-        w = np.expand_dims(w, axis=1)
-        vertices = self._mu + self._eigenvectors @ w
-        return vertices.reshape(-1, 3)
-
-    def save_vertices(self, vertices, name):
-        m = trimesh.Trimesh(vertices, process=False)
-        m.export(os.path.join(self._data_dir, name + '.ply'))
 
     def __call__(self, number_of_meshes, weight=1., overwrite_data=False):
         if not os.path.isdir(self._data_dir):
@@ -43,8 +26,59 @@ class DataGenerator:
         if not os.listdir(self._data_dir) or overwrite_data:  # directory empty
             print("Generating Data from PCA")
             for i in tqdm.tqdm(range(number_of_meshes)):
-                v = self.generate_random_face(weight)
+                v = self.generate_random_vertices(weight)
                 self.save_vertices(v, str(i))
+
+    def save_vertices(self, vertices, name):
+        if isinstance(vertices, torch.Tensor):
+            vertices = vertices.cpu().numpy()
+        m = trimesh.Trimesh(vertices, process=False)
+        m.export(os.path.join(self._data_dir, name + '.ply'))
+
+    @abstractmethod
+    def generate_random_vertices(self, weight):
+        pass
+
+
+class FaceGenerator(DataGenerator):
+    def __init__(self, uhm_path, data_dir='./data'):
+        super(FaceGenerator, self).__init__(uhm_path, data_dir)
+        infile = open(self._model_dir, 'rb')
+        uhm_dict = pickle.load(infile)
+        infile.close()
+
+        self._components = uhm_dict['Eigenvectors'].shape[1]
+        self._mu = uhm_dict['Mean']
+        self._eigenvectors = uhm_dict['Eigenvectors']
+        self._eigenvalues = uhm_dict['EigenValues']
+
+    def generate_random_vertices(self, weight):
+        w = weight * np.random.normal(size=self._components) * \
+            self._eigenvalues ** 0.5
+        w = np.expand_dims(w, axis=1)
+        vertices = self._mu + self._eigenvectors @ w
+        return vertices.reshape(-1, 3)
+
+
+class BodyGenerator(DataGenerator):
+    """ To install star model see https://github.com/ahmedosman/STAR"""
+    def __init__(self, data_dir='./data'):
+        super(BodyGenerator, self).__init__(None, data_dir)
+        from star.pytorch.star import STAR
+        self._star = STAR(gender='neutral', num_betas=10)
+
+    def generate_random_vertices(self, weight=3):
+        poses = torch.zeros([1, 72])
+        betas = torch.rand([1, self._star.num_betas]) * 2 * weight - weight
+
+        trans = torch.zeros([1, 3])
+        mesh = self._star.forward(poses.cuda(), betas.cuda(), trans.cuda())
+        return mesh[-1, :, :]
+
+    def save_mean_mesh(self):
+        t = trimesh.Trimesh(self._star.v_template.cpu().numpy(),
+                            self._star.f, process=False)
+        t.export(os.path.join(self._data_dir, 'template.ply'))
 
 
 def get_data_loaders(config, template=None):
@@ -384,3 +418,6 @@ class MeshInMemoryDataset(InMemoryDataset):
         val_data = self._process_set(self._val_names)
         torch.save(self.collate(val_data), self.processed_paths[2])
 
+
+if __name__ == '__main__':
+    BodyGenerator('/home/simo/Desktop').save_mean_mesh()

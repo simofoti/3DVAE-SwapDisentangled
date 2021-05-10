@@ -12,3 +12,7 @@ outputs/
 vertices_of_faces_from_UHM
 
 precomputed/
+
+precomputed_faces/
+
+vertices_of_bodies_from_STAR/

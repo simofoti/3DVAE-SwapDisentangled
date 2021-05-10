@@ -6,7 +6,8 @@ import torch.nn
 from torch.utils.tensorboard import SummaryWriter
 
 import utils
-from data_generation_and_loading import DataGenerator, get_data_loaders
+from data_generation_and_loading import FaceGenerator, BodyGenerator
+from data_generation_and_loading import get_data_loaders
 from model_manager import ModelManager
 from test import Tester
 
@@ -37,8 +38,11 @@ else:
     device = torch.device('cuda')
 
 if opts.generate_data:
-    data_generator = DataGenerator(config['data']['pca_path'],
-                                   config['data']['dataset_path'])
+    if config['data']['dataset_type'] == 'faces':
+        data_generator = FaceGenerator(config['data']['pca_path'],
+                                       config['data']['dataset_path'])
+    else:
+        data_generator = BodyGenerator(config['data']['dataset_path'])
     data_generator(config['data']['number_of_meshes'],
                    config['data']['std_pca_latent'], opts.generate_data)
 
