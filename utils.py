@@ -23,7 +23,7 @@ def prepare_sub_folder(output_directory):
     if not os.path.exists(checkpoint_directory):
         print(f"Creating directory: {checkpoint_directory}")
         os.makedirs(checkpoint_directory)
-        return checkpoint_directory
+    return checkpoint_directory
 
 
 def load_template(mesh_path):
