@@ -72,8 +72,14 @@ class BodyGenerator(DataGenerator):
         betas = torch.rand([1, self._star.num_betas]) * 2 * weight - weight
 
         trans = torch.zeros([1, 3])
-        mesh = self._star.forward(poses.cuda(), betas.cuda(), trans.cuda())
-        return mesh[-1, :, :]
+        verts = self._star.forward(poses.cuda(), betas.cuda(), trans.cuda())[-1]
+        # Normalize verts in -1, 1 wrt height
+        y_min = torch.min(verts[:, 1])
+        scale = 2 / (torch.max(verts[:, 1]) - y_min)
+        verts[:, 1] -= y_min
+        verts *= scale
+        verts[:, 1] -= 1
+        return verts
 
     def save_mean_mesh(self):
         t = trimesh.Trimesh(self._star.v_template.cpu().numpy(),
