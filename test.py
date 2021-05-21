@@ -41,12 +41,10 @@ class Tester:
         recon_errors = self.reconstruction_errors(self._test_loader)
         train_set_diversity = self.compute_diversity_train_set()
         diversity = self.compute_diversity()
-        regional_diversity = None  # self.compute_regional_diversity()
         specificity = self.compute_specificity()
         metrics = {'recon_errors': recon_errors,
                    'train_set_diversity': train_set_diversity,
                    'diversity': diversity,
-                   'regional_diversity': regional_diversity,
                    'specificity': specificity}
 
         outfile_path = os.path.join(self._out_dir, 'eval_metrics.json')
@@ -267,50 +265,14 @@ class Tester:
             mean_distances.append(torch.mean(verts_batch_distances, dim=1))
         return torch.mean(torch.cat(mean_distances, dim=0)).item()
 
-    def compute_regional_diversity(self, n_samples=1000):
-        print('Computing generative model regional diversity')
-        samples_per_batch = 20
-        r_diversity = {k: None for k in self._manager.latent_regions.keys()}
-
-        for key, z_region in tqdm.tqdm(self._manager.latent_regions.items()):
-            z_mean = self.latent_stats['means'].expand(samples_per_batch, -1)
-            region_dist = []
-            not_region_dist = []
-            for _ in range(n_samples):
-                z_rand_0 = self.random_latent(samples_per_batch)
-                z_rand_1 = self.random_latent(samples_per_batch)
-                z_0, z_1 = z_mean.clone(), z_mean.clone()
-                z_0[z_region[0]:z_region[1]] = z_rand_0[z_region[0]:z_region[1]]
-                z_1[z_region[0]:z_region[1]] = z_rand_1[z_region[0]:z_region[1]]
-
-                x_0 = self._manager.generate(z_0.to(self._device))
-                x_1 = self._manager.generate(z_1.to(self._device))
-
-                if self._normalized_data:
-                    x_0 = self._unnormalize_verts(x_0)
-                    x_1 = self._unnormalize_verts(x_1)
-
-                verts_distances = self._manager.compute_vertex_errors(x_0, x_1)
-                verts_region_idx = \
-                    self._manager.template.feat_and_cont[key]['feature']
-                mask_not_region = torch.ones(verts_distances.shape[-1],
-                                             dtype=torch.bool,
-                                             device=verts_distances.device)
-                mask_not_region[verts_region_idx] = 0
-                region_dist.append(
-                    torch.mean(verts_distances[:, verts_region_idx], dim=1))
-                not_region_dist.append(
-                    torch.mean(verts_distances[:, mask_not_region], dim=1))
-
-            r_diversity[key] = {
-                'region': torch.mean(torch.cat(region_dist, dim=0)).item(),
-                'outside': torch.mean(torch.cat(not_region_dist, dim=0)).item()}
-        return r_diversity
-
     def compute_specificity(self, n_samples=100):
         print('Computing generative model specificity')
         min_distances = []
         for _ in tqdm.tqdm(range(n_samples)):
+            sample = self.random_generation(1)
+            if self._normalized_data:
+                sample = self._unnormalize_verts(sample)
+
             mean_distances = []
             for data in self._train_loader:
                 if self._config['data']['swap_features']:
@@ -318,12 +280,10 @@ class Tester:
                 else:
                     x = data.x
 
-                x = x.to(self._device)
-                sample = self.random_generation(1)
-
                 if self._normalized_data:
-                    x = self._unnormalize_verts(x)
-                    sample = self._unnormalize_verts(sample)
+                    x = self._unnormalize_verts(x.to(self._device))
+                else:
+                    x = x.to(self._device)
 
                 v_dist = self._manager.compute_vertex_errors(
                     x, sample.expand(x.shape[0], -1, -1))
@@ -421,4 +381,3 @@ if __name__ == '__main__':
     # print(tester.compute_specificity(train_loader, 100))
     # print(tester.compute_diversity_train_set())
     # print(tester.compute_diversity())
-    # print(tester.compute_regional_diversity(10))
