@@ -167,6 +167,10 @@ class ModelManager(torch.nn.Module):
         self._net.eval()
         return self._net.decode(z)
 
+    def generate_for_opt(self, z):
+        self._net.train()
+        return self._net.decode(z)
+
     def run_epoch(self, data_loader, device, train=True):
         if train:
             self._net.train()

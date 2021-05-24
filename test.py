@@ -4,6 +4,7 @@ import pickle
 import tqdm
 import trimesh
 import torch.nn
+import pytorch3d.loss
 
 import pandas as pd
 import seaborn as sns
@@ -11,6 +12,9 @@ import matplotlib.pyplot as plt
 from torchvision.io import write_video
 from torchvision.utils import make_grid, save_image
 from pytorch3d.renderer import BlendParams
+from pytorch3d.loss.point_mesh_distance import point_face_distance
+from pytorch3d.loss.chamfer import _handle_pointcloud_input
+from pytorch3d.ops.knn import knn_points
 
 
 class Tester:
@@ -25,6 +29,15 @@ class Tester:
         self._train_loader = train_load
         self._test_loader = test_load
         self.latent_stats = self.compute_latent_stats(train_load)
+
+        self.coma_landmarks = [
+            1337, 1344, 1163, 878, 3632, 2496, 2428, 2291, 2747,
+            3564, 1611, 2715, 3541, 1576, 3503, 3400, 3568, 1519,
+            203, 183, 870, 900, 867, 3536]
+        self.uhm_landmarks = [
+            10754, 10826, 9123, 10667, 19674, 28739, 4831, 19585,
+            8003, 22260, 12492, 27386, 1969, 31925, 31158, 20963,
+            1255, 9881, 32055, 45778, 5355, 27515, 18482, 33691]
 
     def __call__(self):
         self.set_renderings_size(512)
@@ -333,6 +346,154 @@ class Tester:
             padding=10, pad_value=1, nrow=renderings.shape[0])
         save_image(grid, os.path.join(out_mesh_dir, 'latent_swapping.png'))
 
+    def fit_vertices(self, target_verts, lr=5e-3, iterations=250,
+                     target_noise=0, target_landmarks=None):
+        # Scale and position target_verts
+        target_verts = target_verts.unsqueeze(0).to(self._device)
+        if target_landmarks is None:
+            target_landmarks = target_verts[:, self.coma_landmarks, :]
+        target_landmarks = target_landmarks.to(self._device)
+
+        if target_noise > 0:
+            target_verts = target_verts + (torch.randn_like(target_verts) *
+                                           target_noise /
+                                           self._manager.to_mm_const)
+            target_landmarks = target_landmarks + (
+                torch.randn_like(target_landmarks) *
+                target_noise / self._manager.to_mm_const)
+
+        z = self.latent_stats['means'].clone().detach().requires_grad_(True)
+        optimizer = torch.optim.Adam([z], lr)
+        gen_verts = None
+        for i in range(iterations):
+            optimizer.zero_grad()
+            gen_verts = self._manager.generate_for_opt(z.to(self._device))
+            if self._normalized_data:
+                gen_verts = self._unnormalize_verts(gen_verts)
+
+            if i < iterations // 3:
+                er = self._manager._compute_mse_loss(
+                    gen_verts[:, self.uhm_landmarks, :], target_landmarks)
+            else:
+                er, _ = pytorch3d.loss.chamfer_distance(gen_verts, target_verts)
+
+            er.backward()
+            optimizer.step()
+        return gen_verts, target_verts.squeeze()
+
+    def fit_coma_data(self, base_dir='meshes2fit',
+                      noise=0, export_meshes=False):
+        print(f"Fitting CoMA meshes with noise = {noise} mm")
+        out_mesh_dir = os.path.join(self._out_dir, 'fitting')
+        if not os.path.isdir(out_mesh_dir):
+            os.mkdir(out_mesh_dir)
+
+        names_and_scale = {}
+        for dirpath, _, fnames in os.walk(base_dir):
+            for f in fnames:
+                if f.endswith('.ply'):
+                    if f[:5] in ['03274', '03275', '00128', '03277']:
+                        names_and_scale[f] = 9
+                    else:
+                        names_and_scale[f] = 8
+
+        dataframes = []
+        for m_id, scale in tqdm.tqdm(names_and_scale.items()):
+            df_id = m_id.split('.')[0]
+            subd = False
+            mesh_path = os.path.join(base_dir, m_id)
+            target_mesh = trimesh.load_mesh(mesh_path, 'ply', process=False)
+            target_verts = torch.tensor(
+                target_mesh.vertices, dtype=torch.float,
+                requires_grad=False, device=self._device)
+
+            # scale and translate to match template. Values manually computed
+            target_verts *= scale
+            target_verts[:, 1] += 0.15
+
+            # If target mesh was subdivided use original target to retrieve its
+            # landmarks
+            target_landmarks = None
+            if 'subd' in m_id:
+                subd = True
+                df_id = m_id.split('_')[0]
+                base_path = os.path.join(base_dir, m_id.split('_')[0] + '.ply')
+                base_mesh = trimesh.load_mesh(base_path, 'ply', process=False)
+                base_verts = torch.tensor(
+                    base_mesh.vertices, dtype=torch.float,
+                    requires_grad=False, device=self._device)
+                target_landmarks = base_verts[self.coma_landmarks, :]
+                target_landmarks = target_landmarks.unsqueeze(0)
+                target_landmarks *= scale
+                target_landmarks[:, 1] += 0.15
+
+            out_verts, target_verts = self.fit_vertices(
+                target_verts, target_noise=noise,
+                target_landmarks=target_landmarks)
+
+            closest_p_errors = self._manager.to_mm_const * \
+                self._dist_closest_point(out_verts, target_verts.unsqueeze(0))
+
+            dataframes.append(pd.DataFrame(
+                {'id': df_id, 'noise': noise, 'subdivided': subd,
+                 'errors': closest_p_errors.squeeze().detach().cpu().numpy()}))
+
+            if export_meshes:
+                mesh_name = m_id.split('.')[0]
+                out_mesh = trimesh.Trimesh(
+                    out_verts[0, ::].cpu().detach().numpy(),
+                    self._manager.template.face.t().cpu().numpy())
+                out_mesh.export(os.path.join(
+                    out_mesh_dir, mesh_name + f"_fit_{str(noise)}" + '.ply'))
+                target_mesh.vertices = target_verts.detach().cpu().numpy()
+                target_mesh.export(os.path.join(
+                    out_mesh_dir, mesh_name + f"_t_{str(noise)}" + '.ply'))
+        return pd.concat(dataframes)
+
+    def fit_coma_data_different_noises(self, base_dir='meshes2fit'):
+        noises = [0, 2, 4, 6, 8]
+        dataframes = []
+        for n in noises:
+            dataframes.append(self.fit_coma_data(base_dir, n, True))
+        df = pd.concat(dataframes)
+        sns.set_theme(style="ticks")
+        plt.figure()
+        sns.lineplot(data=df, x='noise', y='errors', style='subdivided',
+                     markers=True, dashes=False, ci='sd')
+        plt.savefig(os.path.join(self._out_dir, 'coma_fitting.svg'))
+
+        plt.figure()
+        sns.boxplot(data=df, x='noise', y='errors', hue='subdivided',
+                    showfliers=False)
+        plt.savefig(os.path.join(self._out_dir, 'coma_fitting_box.svg'))
+
+        plt.figure()
+        sns.violinplot(data=df[df.errors < 3], x='noise', y='errors',
+                       hue='subdivided', split=True)
+        plt.savefig(os.path.join(self._out_dir, 'coma_fitting_violin.svg'))
+
+    @staticmethod
+    def _point_mesh_distance(points, verts, faces):
+        points = points.squeeze()
+        verts_packed = verts.to(points.device)
+        faces_packed = torch.tensor(faces, device=points.device).t()
+        first_idx = torch.tensor([0], device=points.device)
+
+        tris = verts_packed[faces_packed]
+
+        point_to_face = point_face_distance(points, first_idx, tris,
+                                            first_idx, points.shape[0])
+        return point_to_face / points.shape[0]
+
+    @staticmethod
+    def _dist_closest_point(x, y):
+        # for each point on x return distance to closest point in y
+        x, x_lengths, x_normals = _handle_pointcloud_input(x, None, None)
+        y, y_lengths, y_normals = _handle_pointcloud_input(y, None, None)
+        x_nn = knn_points(x, y, lengths1=x_lengths, lengths2=y_lengths, K=1)
+        cham_x = x_nn.dists[..., 0]
+        return cham_x
+
 
 if __name__ == '__main__':
     import argparse
@@ -370,7 +531,8 @@ if __name__ == '__main__':
     tester = Tester(manager, normalization_dict, train_loader, test_loader,
                     output_directory, configurations)
 
-    tester()
+    # tester()
+    tester.fit_coma_data_different_noises()
     # tester.set_renderings_size(512)
     # tester.set_rendering_background_color()
     # tester.latent_swapping(next(iter(test_loader)).x)
