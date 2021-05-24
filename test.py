@@ -494,6 +494,67 @@ class Tester:
         cham_x = x_nn.dists[..., 0]
         return cham_x
 
+    def direct_manipulation(self, z=None, indices=None, new_coords=None,
+                            lr=0.1, iterations=50, affect_only_zf=True):
+        if z is None:
+            z = self.latent_stats['means'].unsqueeze(0)
+            z = z.clone().detach().requires_grad_(True)
+        if indices is None and new_coords is None:
+            indices = [8816, 8069]
+            new_coords = torch.tensor([[-0.0108174, 0.0814601, 0.564498],
+                                       [-0.1821480, 0.0190682, 0.419531]])
+        new_coords = new_coords.unsqueeze(0).to(self._device)
+
+        colors = self._manager.template.colors.to(torch.long)
+        features = [str(colors[i].cpu().detach().numpy()) for i in indices]
+        assert all(x == features[0] for x in features)
+
+        zf_idxs = self._manager.latent_regions[features[0]]
+
+        optimizer = torch.optim.Adam([z], lr)
+        initial_verts = self._manager.generate_for_opt(z.to(self._device))
+        if self._normalized_data:
+            initial_verts = self._unnormalize_verts(initial_verts)
+        gen_verts = None
+        for i in range(iterations):
+            optimizer.zero_grad()
+            gen_verts = self._manager.generate_for_opt(z.to(self._device))
+            if self._normalized_data:
+                gen_verts = self._unnormalize_verts(gen_verts)
+
+            loss = self._manager._compute_mse_loss(
+                gen_verts[:, indices, :], new_coords)
+            loss.backward()
+
+            if affect_only_zf:
+                z.grad[:, :zf_idxs[0]] = 0
+                z.grad[:, zf_idxs[1]:] = 0
+            optimizer.step()
+
+        # Save output meshes
+        out_mesh_dir = os.path.join(self._out_dir, 'direct_manipulation')
+        if not os.path.isdir(out_mesh_dir):
+            os.mkdir(out_mesh_dir)
+
+        initial_mesh = trimesh.Trimesh(
+            initial_verts[0, ::].cpu().detach().numpy(),
+            self._manager.template.face.t().cpu().numpy())
+        initial_mesh.export(os.path.join(out_mesh_dir, 'initial.ply'))
+
+        new_mesh = trimesh.Trimesh(
+            gen_verts[0, ::].cpu().detach().numpy(),
+            self._manager.template.face.t().cpu().numpy())
+        new_mesh.export(os.path.join(out_mesh_dir, 'new.ply'))
+
+        for i, coords in zip(indices, new_coords[0, ::].detach().cpu().numpy()):
+            sphere = trimesh.creation.icosphere(radius=0.01)
+            sphere.vertices = sphere.vertices + coords
+            sphere.export(os.path.join(out_mesh_dir, f'target_{i}.ply'))
+
+            sphere = trimesh.creation.icosphere(radius=0.01)
+            sphere.vertices += initial_verts[0, i, :].cpu().detach().numpy()
+            sphere.export(os.path.join(out_mesh_dir, f'selected_{i}.ply'))
+
 
 if __name__ == '__main__':
     import argparse
@@ -531,7 +592,8 @@ if __name__ == '__main__':
     tester = Tester(manager, normalization_dict, train_loader, test_loader,
                     output_directory, configurations)
 
-    # tester()
+    tester()
+    tester.direct_manipulation()
     tester.fit_coma_data_different_noises()
     # tester.set_renderings_size(512)
     # tester.set_rendering_background_color()
