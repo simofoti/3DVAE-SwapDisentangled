@@ -6,6 +6,7 @@ import trimesh
 import torch.nn
 import pytorch3d.loss
 
+import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -120,6 +121,7 @@ class Tester:
         # added before start perturbing the next latent variable
         n_steps = 10
         all_frames, all_rendered_differences, max_distances = [], [], []
+        all_renderings = []
         for i in tqdm.tqdm(range(z_means.shape[0])):
             z = z_means.repeat(n_steps, 1)
             z[:, i] = torch.linspace(
@@ -133,9 +135,11 @@ class Tester:
             differences_from_first = self._manager.compute_vertex_errors(
                 gen_verts, gen_verts[0].expand(gen_verts.shape[0], -1, -1))
             max_distances.append(differences_from_first[-1, ::])
-            renderings = self._manager.render(gen_verts).cpu()
+            renderings = self._manager.render(gen_verts).detach().cpu()
+            all_renderings.append(renderings)
             differences_renderings = self._manager.render(
-                gen_verts, differences_from_first, error_max_scale=5).cpu()
+                gen_verts, differences_from_first,
+                error_max_scale=5).cpu().detach()
             all_rendered_differences.append(differences_renderings)
             frames = torch.cat([renderings, differences_renderings], dim=-1)
             all_frames.append(
@@ -163,6 +167,17 @@ class Tester:
         write_video(
             os.path.join(self._out_dir, 'latent_exploration_tiled.mp4'),
             torch.stack(grid_frames, dim=0).permute(0, 2, 3, 1) * 255, fps=1)
+
+        # Same as before, but only output meshes are used
+        stacked_frames_meshes = torch.stack(all_renderings)
+        grid_frames_m = []
+        for i in range(stacked_frames_meshes.shape[1]):
+            grid_frames_m.append(
+                make_grid(stacked_frames_meshes[:, i, ::], padding=10,
+                          pad_value=1, nrow=grid_nrows))
+        write_video(
+            os.path.join(self._out_dir, 'latent_exploration_outs_tiled.mp4'),
+            torch.stack(grid_frames_m, dim=0).permute(0, 2, 3, 1) * 255, fps=4)
 
         # Create a plot showing the effects of perturbing latent variables in
         # each region of the face
@@ -427,7 +442,7 @@ class Tester:
                 target_landmarks *= scale
                 target_landmarks[:, 1] += 0.15
 
-            out_verts, target_verts = self.fit_vertices(
+            out_verts, t_verts = self.fit_vertices(
                 target_verts, target_noise=noise,
                 target_landmarks=target_landmarks)
 
@@ -445,7 +460,7 @@ class Tester:
                     self._manager.template.face.t().cpu().numpy())
                 out_mesh.export(os.path.join(
                     out_mesh_dir, mesh_name + f"_fit_{str(noise)}" + '.ply'))
-                target_mesh.vertices = target_verts.detach().cpu().numpy()
+                target_mesh.vertices = t_verts.detach().cpu().numpy()
                 target_mesh.export(os.path.join(
                     out_mesh_dir, mesh_name + f"_t_{str(noise)}" + '.ply'))
         return pd.concat(dataframes)
@@ -458,18 +473,17 @@ class Tester:
         df = pd.concat(dataframes)
         sns.set_theme(style="ticks")
         plt.figure()
-        sns.lineplot(data=df, x='noise', y='errors', style='subdivided',
+        sns.lineplot(data=df, x='noise', y='errors',
                      markers=True, dashes=False, ci='sd')
         plt.savefig(os.path.join(self._out_dir, 'coma_fitting.svg'))
 
         plt.figure()
-        sns.boxplot(data=df, x='noise', y='errors', hue='subdivided',
-                    showfliers=False)
+        sns.boxplot(data=df, x='noise', y='errors', showfliers=False)
         plt.savefig(os.path.join(self._out_dir, 'coma_fitting_box.svg'))
 
         plt.figure()
         sns.violinplot(data=df[df.errors < 3], x='noise', y='errors',
-                       hue='subdivided', split=True)
+                       split=False)
         plt.savefig(os.path.join(self._out_dir, 'coma_fitting_violin.svg'))
 
     @staticmethod
@@ -498,11 +512,13 @@ class Tester:
                             lr=0.1, iterations=50, affect_only_zf=True):
         if z is None:
             z = self.latent_stats['means'].unsqueeze(0)
+            # z = self.random_latent(1)
             z = z.clone().detach().requires_grad_(True)
         if indices is None and new_coords is None:
-            indices = [8816, 8069]
-            new_coords = torch.tensor([[-0.0108174, 0.0814601, 0.564498],
-                                       [-0.1821480, 0.0190682, 0.419531]])
+            indices = [8816, 8069, 8808]
+            new_coords = torch.tensor([[-0.0108174, 0.0814601, 0.664498],
+                                       [-0.1821480, 0.0190682, 0.419531],
+                                       [-0.0096422, 0.3058790, 0.465528]])
         new_coords = new_coords.unsqueeze(0).to(self._device)
 
         colors = self._manager.template.colors.to(torch.long)
@@ -555,6 +571,83 @@ class Tester:
             sphere.vertices += initial_verts[0, i, :].cpu().detach().numpy()
             sphere.export(os.path.join(out_mesh_dir, f'selected_{i}.ply'))
 
+    def interpolate(self):
+        with open(os.path.join('precomputed', 'data_split.json'), 'r') as fp:
+            data = json.load(fp)
+        test_list = data['test']
+        meshes_root = self._test_loader.dataset.root
+
+        # Pick first test mesh and find most different mesh in test set
+        v_1 = None
+        distances = [0]
+        for i, fname in enumerate(test_list):
+            mesh_path = os.path.join(meshes_root, fname + '.ply')
+            mesh = trimesh.load_mesh(mesh_path, 'ply', process=False)
+            mesh_verts = torch.tensor(mesh.vertices, dtype=torch.float,
+                                      requires_grad=False, device='cpu')
+            if i == 0:
+                v_1 = mesh_verts
+            else:
+                distances.append(
+                    self._manager._compute_mse_loss(v_1, mesh_verts).item())
+
+        m_2_path = os.path.join(
+            meshes_root, test_list[np.asarray(distances).argmax()] + '.ply')
+        m_2 = trimesh.load_mesh(m_2_path, 'ply', process=False)
+        v_2 = torch.tensor(m_2.vertices, dtype=torch.float, requires_grad=False)
+
+        v_1 = (v_1 - self._norm_dict['mean']) / self._norm_dict['std']
+        v_2 = (v_2 - self._norm_dict['mean']) / self._norm_dict['std']
+
+        z_1 = self._manager.encode(v_1.unsqueeze(0).to(self._device))
+        z_2 = self._manager.encode(v_2.unsqueeze(0).to(self._device))
+
+        # Interpolate per feature
+        features = list(self._manager.template.feat_and_cont.keys())
+        z = z_1.repeat(len(features) // 2, 1)
+        all_frames, rows = [], []
+        for feature in features:
+            zf_idxs = self._manager.latent_regions[feature]
+            z_1f = z_1[:, zf_idxs[0]:zf_idxs[1]]
+            z_2f = z_2[:, zf_idxs[0]:zf_idxs[1]]
+            z[:, zf_idxs[0]:zf_idxs[1]] = self.vector_linspace(
+                z_1f, z_2f, len(features) // 2).to(self._device)
+
+            gen_verts = self._manager.generate(z.to(self._device))
+            if self._normalized_data:
+                gen_verts = self._unnormalize_verts(gen_verts)
+
+            renderings = self._manager.render(gen_verts).cpu()
+            all_frames.append(renderings)
+            rows.append(make_grid(renderings, padding=10,
+                        pad_value=1, nrow=len(features)))
+            z = z[-1, :].repeat(len(features) // 2, 1)
+
+        save_image(torch.cat(rows, dim=-2),
+                   os.path.join(self._out_dir, 'interpolate_per_feature.png'))
+        write_video(
+            os.path.join(self._out_dir, 'interpolate_per_feature.mp4'),
+            torch.cat(all_frames, dim=0).permute(0, 2, 3, 1) * 255, fps=4)
+
+        # Interpolate all features
+        zs = self.vector_linspace(z_1, z_2, len(features))
+
+        gen_verts = self._manager.generate(zs.to(self._device))
+        if self._normalized_data:
+            gen_verts = self._unnormalize_verts(gen_verts)
+
+        renderings = self._manager.render(gen_verts).cpu()
+        im = make_grid(renderings, padding=10, pad_value=1, nrow=len(features))
+        save_image(im, os.path.join(self._out_dir, 'interpolate_all.png'))
+
+    @staticmethod
+    def vector_linspace(start, finish, steps):
+        ls = []
+        for s, f in zip(start[0], finish[0]):
+            ls.append(torch.linspace(s, f, steps))
+        res = torch.stack(ls)
+        return res.t()
+
 
 if __name__ == '__main__':
     import argparse
@@ -593,10 +686,11 @@ if __name__ == '__main__':
                     output_directory, configurations)
 
     tester()
-    tester.direct_manipulation()
-    tester.fit_coma_data_different_noises()
+    # tester.direct_manipulation()
+    # tester.fit_coma_data_different_noises()
     # tester.set_renderings_size(512)
     # tester.set_rendering_background_color()
+    # tester.interpolate()
     # tester.latent_swapping(next(iter(test_loader)).x)
     # tester.per_variable_range_experiments()
     # tester.random_generation_and_rendering(n_samples=16)
