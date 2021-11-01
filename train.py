@@ -46,7 +46,9 @@ if opts.generate_data:
     data_generator(config['data']['number_of_meshes'],
                    config['data']['std_pca_latent'], opts.generate_data)
 
-manager = ModelManager(configurations=config, device=device)
+manager = ModelManager(
+    configurations=config, device=device,
+    precomputed_storage_path=config['data']['precomputed_path'])
 
 train_loader, validation_loader, test_loader, normalization_dict = \
     get_data_loaders(config, manager.template)

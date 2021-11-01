@@ -23,7 +23,7 @@ from pytorch3d.renderer import (
 import utils
 from mesh_simplification import MeshSimplifier
 from compute_spirals import preprocess_spiral
-from model import AE
+from model import Model
 
 
 class ModelManager(torch.nn.Module):
@@ -45,12 +45,15 @@ class ModelManager(torch.nn.Module):
         meshes_all_resolutions = [self.template] + low_res_templates
         spirals_indices = self._precompute_spirals(meshes_all_resolutions)
 
-        self._net = AE(in_channels=self._model_params['in_channels'],
-                       out_channels=self._model_params['out_channels'],
-                       latent_size=self._model_params['latent_size'],
-                       spiral_indices=spirals_indices,
-                       down_transform=down_transforms,
-                       up_transform=up_transforms).to(device)
+        self._w_kl_loss = float(self._optimization_params['kl_weight'])
+
+        self._net = Model(in_channels=self._model_params['in_channels'],
+                          out_channels=self._model_params['out_channels'],
+                          latent_size=self._model_params['latent_size'],
+                          spiral_indices=spirals_indices,
+                          down_transform=down_transforms,
+                          up_transform=up_transforms,
+                          is_vae=self._w_kl_loss > 0).to(device)
 
         self._optimizer = torch.optim.Adam(
             self._net.parameters(),
@@ -60,10 +63,11 @@ class ModelManager(torch.nn.Module):
         self._latent_regions = self._compute_latent_regions()
 
         self._losses = None
-        self._w_feature_cons_loss = float(
-            self._optimization_params['feature_consistency_weight'])
+        self._w_latent_cons_loss = float(
+            self._optimization_params['latent_consistency_weight'])
         self._w_laplacian_loss = float(
             self._optimization_params['laplacian_weight'])
+        self._w_dip_loss = float(self._optimization_params['dip_weight'])
 
         self._rend_device = rendering_device if rendering_device else device
         self._default_shader = HardGouraudShader(
@@ -82,9 +86,15 @@ class ModelManager(torch.nn.Module):
         bs = self._optimization_params['batch_size']
         self._batch_diagonal_idx = [(bs + 1) * i for i in range(bs)]
 
+        if self._w_latent_cons_loss > 0:
+            assert self._swap_features
+        if self._w_dip_loss > 0:
+            assert self._w_kl_loss > 0
+
     @property
     def loss_keys(self):
-        return ['reconstruction', 'feature_consistency', 'laplacian', 'tot']
+        return ['reconstruction', 'kl', 'dip',
+                'latent_consistency', 'laplacian', 'tot']
 
     @property
     def latent_regions(self):
@@ -160,7 +170,7 @@ class ModelManager(torch.nn.Module):
     @torch.no_grad()
     def encode(self, data):
         self._net.eval()
-        return self._net.encode(data)
+        return self._net.encode(data)[0]
 
     @torch.no_grad()
     def generate(self, z):
@@ -193,26 +203,41 @@ class ModelManager(torch.nn.Module):
             self._optimizer.zero_grad()
 
         data = data.to(device)
-        reconstructed, z = self.forward(data)
+        reconstructed, z, mu, logvar = self.forward(data)
         loss_recon = self._compute_mse_loss(reconstructed, data.x)
+        loss_laplacian = self._compute_laplacian_regularizer(reconstructed)
+
+        if self._w_kl_loss > 0:
+            loss_kl = self._compute_kl_divergence_loss(mu, logvar)
+        else:
+            loss_kl = torch.tensor(0, device=device)
+
+        if self._w_dip_loss > 0:
+            loss_dip = self._compute_dip_loss(mu, logvar)
+        else:
+            loss_dip = torch.tensor(0, device=device)
 
         if self._swap_features:
-            loss_f_cons = self._compute_feature_consistency(z, data.swapped)
+            loss_z_cons = self._compute_latent_consistency(z, data.swapped)
         else:
-            loss_f_cons = torch.tensor(0, device=device)
+            loss_z_cons = torch.tensor(0, device=device)
 
-        loss_laplacian = self._compute_laplacian_regularizer(reconstructed)
         loss_tot = loss_recon + \
-            self._w_feature_cons_loss * loss_f_cons + \
+            self._w_kl_loss * loss_kl + \
+            self._w_dip_loss * loss_dip + \
+            self._w_latent_cons_loss * loss_z_cons + \
             self._w_laplacian_loss * loss_laplacian
 
         if train:
             loss_tot.backward()
             self._optimizer.step()
+
         return {'reconstruction': loss_recon.item(),
-                'feature_consistency': loss_f_cons.item(),
+                'kl': loss_kl.item(),
+                'dip': loss_dip.item(),
+                'latent_consistency': loss_z_cons.item(),
                 'laplacian': loss_laplacian.item(),
-                'tot': loss_tot}
+                'tot': loss_tot.item()}
 
     @staticmethod
     def _compute_l1_loss(prediction, gt, reduction='mean'):
@@ -232,12 +257,31 @@ class ModelManager(torch.nn.Module):
 
     @staticmethod
     def _compute_kl_divergence_loss(mu, logvar):
-        return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+        return torch.mean(kl, dim=0)
 
-    def _compute_feature_consistency(self, z, swapped_feature):
+    def _compute_dip_loss(self, mu, logvar):
+        centered_mu = mu - mu.mean(dim=1, keepdim=True)
+        cov_mu = centered_mu.t().matmul(centered_mu).squeeze()
+
+        if self._optimization_params['dip_type'] == 'ii':
+            cov_z = cov_mu + torch.mean(
+                torch.diagonal((2. * logvar).exp(), dim1=0), dim=0)
+        else:
+            cov_z = cov_mu
+
+        cov_diag = torch.diag(cov_z)
+        cov_offdiag = cov_z - torch.diag(cov_diag)
+
+        lambda_diag = self._optimization_params['dip_diag_lambda']
+        lambda_offdiag = self._optimization_params['dip_offdiag_lambda']
+        return lambda_offdiag * torch.sum(cov_offdiag ** 2) + \
+            lambda_diag * torch.sum((cov_diag - 1) ** 2)
+
+    def _compute_latent_consistency(self, z, swapped_feature):
         bs = self._optimization_params['batch_size']
-        eta1 = self._optimization_params['feature_consistency_eta1']
-        eta2 = self._optimization_params['feature_consistency_eta2']
+        eta1 = self._optimization_params['latent_consistency_eta1']
+        eta2 = self._optimization_params['latent_consistency_eta2']
         latent_region = self._latent_regions[swapped_feature]
         z_feature = z[:, latent_region[0]:latent_region[1]].view(bs, bs, -1)
         z_else = torch.cat([z[:, :latent_region[0]],
@@ -298,7 +342,7 @@ class ModelManager(torch.nn.Module):
     def log_images(self, in_data, writer, epoch, normalization_dict=None,
                    phase='train', error_max_scale=5):
         gt_meshes = in_data.x.to(self._rend_device)
-        out_meshes, _ = self.forward(in_data.to(self.device))
+        out_meshes = self.forward(in_data.to(self.device))[0]
         out_meshes = out_meshes.to(self._rend_device)
 
         if self._normalized_data:

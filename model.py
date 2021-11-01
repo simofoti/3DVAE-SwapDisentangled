@@ -85,10 +85,10 @@ class SpiralDeblock(nn.Module):
         return out
 
 
-class AE(nn.Module):
+class Model(nn.Module):
     def __init__(self, in_channels, out_channels, latent_size,
-                 spiral_indices, down_transform, up_transform):
-        super(AE, self).__init__()
+                 spiral_indices, down_transform, up_transform, is_vae=False):
+        super(Model, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.latent_size = latent_size
@@ -96,6 +96,7 @@ class AE(nn.Module):
         self.down_transform = down_transform
         self.up_transform = up_transform
         self.num_vert = self.down_transform[-1].size(0)
+        self.is_vae = is_vae
 
         # encoder
         self.en_layers = nn.ModuleList()
@@ -110,6 +111,10 @@ class AE(nn.Module):
                                   self.spiral_indices[idx]))
         self.en_layers.append(
             nn.Linear(self.num_vert * out_channels[-1], latent_size))
+
+        if self.is_vae:  # add another linear layer for logvar
+            self.en_layers.append(
+                nn.Linear(self.num_vert * out_channels[-1], latent_size))
 
         # decoder
         self.de_layers = nn.ModuleList()
@@ -137,14 +142,20 @@ class AE(nn.Module):
                 nn.init.xavier_uniform_(param)
 
     def encode(self, x):
+        n_linear_layers = 2 if self.is_vae else 1
         for i, layer in enumerate(self.en_layers):
-            if i != len(self.en_layers) - 1:
+            if i < len(self.en_layers) - n_linear_layers:
                 x = layer(x, self.down_transform[i])
-            else:
-                x = x.view(-1, layer.weight.size(1))
-                x = layer(x)
-                x = torch.sigmoid(x)
-        return x
+
+        x = x.view(-1, self.en_layers[-1].weight.size(1))
+        mu = self.en_layers[-1](x)
+
+        if self.is_vae:
+            logvar = self.en_layers[-2](x)
+        else:
+            mu = torch.sigmoid(mu)
+            logvar = None
+        return mu, logvar
 
     def decode(self, x):
         num_layers = len(self.de_layers)
@@ -160,6 +171,16 @@ class AE(nn.Module):
         return x
 
     def forward(self, x):
-        z = self.encode(x)
+        mu, logvar = self.encode(x)
+        if self.is_vae and self.training:
+            z = self._reparameterize(mu, logvar)
+        else:
+            z = mu
         out = self.decode(z)
-        return out, z
+        return out, z, mu, logvar
+
+    @staticmethod
+    def _reparameterize(mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std

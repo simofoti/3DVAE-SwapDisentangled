@@ -22,6 +22,7 @@ class Tester:
     def __init__(self, model_manager, norm_dict,
                  train_load, test_load, out_dir, config):
         self._manager = model_manager
+        self._manager.eval()
         self._device = model_manager.device
         self._norm_dict = norm_dict
         self._normalized_data = config['data']['normalize_data']
@@ -247,7 +248,7 @@ class Tester:
             data = data.to(self._device)
             gt = data.x
 
-            recon, _ = self._manager.forward(data)
+            recon = self._manager.forward(data)[0]
 
             if self._normalized_data:
                 gt = self._unnormalize_verts(gt)
