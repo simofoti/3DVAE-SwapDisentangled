@@ -100,6 +100,14 @@ class ModelManager(torch.nn.Module):
     def latent_regions(self):
         return self._latent_regions
 
+    @property
+    def is_vae(self):
+        return self._w_kl_loss > 0
+
+    @property
+    def model_latent_size(self):
+        return self._model_params['latent_size']
+
     def _precompute_transformations(self):
         storage_path = os.path.join(self._precomputed_storage_path,
                                     'transforms.pkl')

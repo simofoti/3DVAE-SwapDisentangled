@@ -30,6 +30,7 @@ class Tester:
         self._config = config
         self._train_loader = train_load
         self._test_loader = test_load
+        self._is_vae = self._manager.is_vae
         self.latent_stats = self.compute_latent_stats(train_load)
 
         self.coma_landmarks = [
@@ -111,10 +112,17 @@ class Tester:
             colors = [0., 0., 0.]
         return tuple(colors)
 
-    def per_variable_range_experiments(self, z_range_multiplier=1):
-        z_means = self.latent_stats['means']
-        z_mins = self.latent_stats['mins'] * z_range_multiplier
-        z_maxs = self.latent_stats['maxs'] * z_range_multiplier
+    def per_variable_range_experiments(self, z_range_multiplier=1,
+                                       use_z_stats=True):
+        if self._is_vae and not use_z_stats:
+            latent_size = self._manager.model_latent_size
+            z_means = torch.zeros(latent_size)
+            z_mins = -3 * z_range_multiplier * torch.ones(latent_size)
+            z_maxs = 3 * z_range_multiplier * torch.ones(latent_size)
+        else:
+            z_means = self.latent_stats['means']
+            z_mins = self.latent_stats['mins'] * z_range_multiplier
+            z_maxs = self.latent_stats['maxs'] * z_range_multiplier
 
         # Create video perturbing each latent variable from min to max.
         # Show generated mesh and error map next to each other
@@ -198,16 +206,24 @@ class Tester:
                              col_wrap=4, height=3)
 
         grid.map(plt.plot, "z_var", "mean_dist", marker="o")
+        plt.savefig(os.path.join(self._out_dir, 'latent_exploration_split.svg'))
+
+        sns.relplot(data=df, kind="line", x="z_var", y="mean_dist",
+                    hue="region", palette=palette)
         plt.savefig(os.path.join(self._out_dir, 'latent_exploration.svg'))
 
     def random_latent(self, n_samples, z_range_multiplier=1):
-        z_means = self.latent_stats['means']
-        z_mins = self.latent_stats['mins'] * z_range_multiplier
-        z_maxs = self.latent_stats['maxs'] * z_range_multiplier
+        if self._is_vae:  # sample from normal distribution if vae
+            z = torch.randn([n_samples, self._manager.mode_latent_size])
+        else:
+            z_means = self.latent_stats['means']
+            z_mins = self.latent_stats['mins'] * z_range_multiplier
+            z_maxs = self.latent_stats['maxs'] * z_range_multiplier
 
-        uniform = torch.rand([n_samples, z_means.shape[0]],
-                             device=z_means.device)
-        return uniform * (z_maxs - z_mins) + z_mins
+            uniform = torch.rand([n_samples, z_means.shape[0]],
+                                 device=z_means.device)
+            z = uniform * (z_maxs - z_mins) + z_mins
+        return z
 
     def random_generation(self, n_samples=16, z_range_multiplier=1):
         z = self.random_latent(n_samples, z_range_multiplier)
@@ -677,7 +693,9 @@ if __name__ == '__main__':
     else:
         device = torch.device('cuda')
 
-    manager = ModelManager(configurations=configurations, device=device)
+    manager = ModelManager(
+        configurations=configurations, device=device,
+        precomputed_storage_path=configurations['data']['precomputed_path'])
     manager.resume(checkpoint_dir)
 
     train_loader, _, test_loader, normalization_dict = \
