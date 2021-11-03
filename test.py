@@ -52,6 +52,8 @@ class Tester:
         self.per_variable_range_experiments()
         self.random_generation_and_rendering(n_samples=16)
         self.random_generation_and_save(n_samples=16)
+        self.direct_manipulation()
+        self.interpolate()
 
         # Quantitative evaluation
         recon_errors = self.reconstruction_errors(self._test_loader)
@@ -214,7 +216,7 @@ class Tester:
 
     def random_latent(self, n_samples, z_range_multiplier=1):
         if self._is_vae:  # sample from normal distribution if vae
-            z = torch.randn([n_samples, self._manager.mode_latent_size])
+            z = torch.randn([n_samples, self._manager.model_latent_size])
         else:
             z_means = self.latent_stats['means']
             z_mins = self.latent_stats['mins'] * z_range_multiplier
