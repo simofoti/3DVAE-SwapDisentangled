@@ -17,6 +17,8 @@ from pytorch3d.loss.point_mesh_distance import point_face_distance
 from pytorch3d.loss.chamfer import _handle_pointcloud_input
 from pytorch3d.ops.knn import knn_points
 
+from evaluation_metrics import compute_all_metrics, jsd_between_point_cloud_sets
+
 
 class Tester:
     def __init__(self, model_manager, norm_dict,
@@ -336,6 +338,57 @@ class Tester:
                 mean_distances.append(torch.mean(v_dist, dim=1))
             min_distances.append(torch.min(torch.cat(mean_distances, dim=0)))
         return torch.mean(torch.stack(min_distances)).item()
+
+    def evaluate_gen(self, data_loader):
+        try:
+            sample_pcs = torch.tensor(
+                np.load(os.path.join(self._out_dir, "model_out_smp.npy")),
+                device=self._device)
+            ref_pcs = torch.tensor(
+                np.load(os.path.join(self._out_dir, "model_out_ref.npy")),
+                device=self._device)
+        except FileNotFoundError:
+            all_sample = []
+            all_ref = []
+            for data in tqdm.tqdm(data_loader):
+                if self._config['data']['swap_features']:
+                    data.x = data.x[self._manager._batch_diagonal_idx, ::]
+                data = data.to(self._device)
+                if self._normalized_data:
+                    data.x = self._unnormalize_verts(data.x)
+                all_ref.append(data.x)
+
+                sample = self.random_generation(data.x.shape[0])
+                all_sample.append(sample)
+
+            sample_pcs = torch.cat(all_sample, dim=0)
+            ref_pcs = torch.cat(all_ref, dim=0)
+            print("Generation sample size:%s reference size: %s"
+                  % (sample_pcs.size(), ref_pcs.size()))
+
+            # Save the generative output
+            np.save(os.path.join(self._out_dir, "model_out_smp.npy"),
+                    sample_pcs.cpu().detach().numpy())
+            np.save(os.path.join(self._out_dir, "model_out_ref.npy"),
+                    ref_pcs.cpu().detach().numpy())
+
+        # Compute metrics
+        metrics = compute_all_metrics(
+            sample_pcs, ref_pcs, 1)
+        metrics = {k: (v.cpu().detach().item()
+                       if not isinstance(v, float) else v) for k, v in
+                   metrics.items()}
+        print(metrics)
+
+        sample_pcl_npy = sample_pcs.cpu().detach().numpy()
+        ref_pcl_npy = ref_pcs.cpu().detach().numpy()
+        jsd = jsd_between_point_cloud_sets(sample_pcl_npy, ref_pcl_npy)
+        print("JSD:%s" % jsd)
+        metrics["jsd"] = jsd
+
+        outfile_path = os.path.join(self._out_dir, 'eval_metrics_gen.json')
+        with open(outfile_path, 'w') as outfile:
+            json.dump(metrics, outfile)
 
     def latent_swapping(self, v_batch=None):
         if v_batch is None:
