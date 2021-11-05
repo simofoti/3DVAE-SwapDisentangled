@@ -227,10 +227,11 @@ class Tester:
             z = uniform * (z_maxs - z_mins) + z_mins
         return z
 
-    def random_generation(self, n_samples=16, z_range_multiplier=1):
+    def random_generation(self, n_samples=16, z_range_multiplier=1,
+                          denormalize=True):
         z = self.random_latent(n_samples, z_range_multiplier)
         gen_verts = self._manager.generate(z.to(self._device))
-        if self._normalized_data:
+        if self._normalized_data and denormalize:
             gen_verts = self._unnormalize_verts(gen_verts)
         return gen_verts
 
@@ -317,8 +318,6 @@ class Tester:
         min_distances = []
         for _ in tqdm.tqdm(range(n_samples)):
             sample = self.random_generation(1)
-            if self._normalized_data:
-                sample = self._unnormalize_verts(sample)
 
             mean_distances = []
             for data in self._train_loader:
@@ -340,7 +339,7 @@ class Tester:
 
     def latent_swapping(self, v_batch=None):
         if v_batch is None:
-            v_batch = self.random_generation(2)
+            v_batch = self.random_generation(2, denormalize=False)
         else:
             assert v_batch.shape[0] >= 2
             v_batch = v_batch.to(self._device)
@@ -675,19 +674,18 @@ if __name__ == '__main__':
     from model_manager import ModelManager
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', type=str,
-                        default='configurations/default.yaml',
-                        help="Path to the configuration file.")
     parser.add_argument('--id', type=str, default='none',
                         help="ID of experiment")
     parser.add_argument('--output_path', type=str, default='.',
                         help="outputs path")
     opts = parser.parse_args()
-    configurations = utils.get_config(opts.config)
     model_name = opts.id
 
     output_directory = os.path.join(opts.output_path + "/outputs", model_name)
     checkpoint_dir = os.path.join(output_directory, 'checkpoints')
+
+    configurations = utils.get_config(
+        os.path.join(output_directory, "config.yaml"))
 
     if not torch.cuda.is_available():
         device = torch.device('cpu')
