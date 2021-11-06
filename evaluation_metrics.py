@@ -5,6 +5,7 @@ Replaced Chamfer and EMD implementations with the more efficients one from
 pytorch3d and geomloss respectively.
 """
 import torch
+import tqdm
 import geomloss
 import warnings
 import numpy as np
@@ -17,16 +18,17 @@ from pytorch3d.loss import chamfer_distance
 
 # Modified from original implementation to avoid compilation of CUDA kernels
 def emd_approx(sample, ref):
-    return geomloss.SamplesLoss()(sample.cpu(), ref.cpu())
+    return geomloss.SamplesLoss()(sample, ref)
 
 
 def _pairwise_emd_cd_(sample_pcs, ref_pcs, batch_size):
+    print("computing Earth Mover and Chamfer distances")
     n_sample = sample_pcs.shape[0]
     n_ref = ref_pcs.shape[0]
     all_cd = []
     all_emd = []
     iterator = range(n_sample)
-    for sample_b_start in iterator:
+    for sample_b_start in tqdm.tqdm(iterator):
         sample_batch = sample_pcs[sample_b_start]
 
         cd_lst = []
@@ -41,13 +43,13 @@ def _pairwise_emd_cd_(sample_pcs, ref_pcs, batch_size):
             sample_batch_exp = sample_batch_exp.contiguous()
 
             cd_lst.append(chamfer_distance(sample_batch_exp, ref_batch,
-                                           batch_reduction=None)[0])
+                          batch_reduction=None)[0].unsqueeze(0))
 
             emd_batch = emd_approx(sample_batch_exp, ref_batch)
             emd_lst.append(emd_batch.view(1, -1))
 
-        cd_lst = torch.cat(cd_lst, dim=1)
-        emd_lst = torch.cat(emd_lst, dim=1)
+        cd_lst = torch.cat(cd_lst, dim=-1)
+        emd_lst = torch.cat(emd_lst, dim=-1)
         all_cd.append(cd_lst)
         all_emd.append(emd_lst)
 

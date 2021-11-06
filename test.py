@@ -339,42 +339,35 @@ class Tester:
             min_distances.append(torch.min(torch.cat(mean_distances, dim=0)))
         return torch.mean(torch.stack(min_distances)).item()
 
-    def evaluate_gen(self, data_loader):
-        try:
-            sample_pcs = torch.tensor(
-                np.load(os.path.join(self._out_dir, "model_out_smp.npy")),
-                device=self._device)
-            ref_pcs = torch.tensor(
-                np.load(os.path.join(self._out_dir, "model_out_ref.npy")),
-                device=self._device)
-        except FileNotFoundError:
-            all_sample = []
-            all_ref = []
-            for data in tqdm.tqdm(data_loader):
-                if self._config['data']['swap_features']:
-                    data.x = data.x[self._manager._batch_diagonal_idx, ::]
-                data = data.to(self._device)
-                if self._normalized_data:
-                    data.x = self._unnormalize_verts(data.x)
-                all_ref.append(data.x)
+    def evaluate_gen(self, data_loader, n_sampled_points=None):
+        all_sample = []
+        all_ref = []
+        for data in tqdm.tqdm(data_loader):
+            if self._config['data']['swap_features']:
+                data.x = data.x[self._manager._batch_diagonal_idx, ::]
+            data = data.to(self._device)
+            if self._normalized_data:
+                data.x = self._unnormalize_verts(data.x)
 
-                sample = self.random_generation(data.x.shape[0])
-                all_sample.append(sample)
+            ref = data.x
+            sample = self.random_generation(data.x.shape[0])
 
-            sample_pcs = torch.cat(all_sample, dim=0)
-            ref_pcs = torch.cat(all_ref, dim=0)
-            print("Generation sample size:%s reference size: %s"
-                  % (sample_pcs.size(), ref_pcs.size()))
+            if n_sampled_points is not None:
+                subset_idxs = np.random.choice(ref.shape[1], n_sampled_points)
+                ref = ref[:, subset_idxs]
+                sample = sample[:, subset_idxs]
 
-            # Save the generative output
-            np.save(os.path.join(self._out_dir, "model_out_smp.npy"),
-                    sample_pcs.cpu().detach().numpy())
-            np.save(os.path.join(self._out_dir, "model_out_ref.npy"),
-                    ref_pcs.cpu().detach().numpy())
+            all_ref.append(ref)
+            all_sample.append(sample)
+
+        sample_pcs = torch.cat(all_sample, dim=0)
+        ref_pcs = torch.cat(all_ref, dim=0)
+        print("Generation sample size:%s reference size: %s"
+              % (sample_pcs.size(), ref_pcs.size()))
 
         # Compute metrics
         metrics = compute_all_metrics(
-            sample_pcs, ref_pcs, 1)
+            sample_pcs, ref_pcs, self._config['optimization']['batch_size'])
         metrics = {k: (v.cpu().detach().item()
                        if not isinstance(v, float) else v) for k, v in
                    metrics.items()}
