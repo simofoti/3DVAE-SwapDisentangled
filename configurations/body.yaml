@@ -17,7 +17,7 @@ optimization:
   weight_decay: 0
 
   laplacian_weight: 1
-  kl_weight: 0                                                                  # if 0, AE architecture is used
+  kl_weight: 1e-4                                                               # if 0, AE architecture is used
 
   latent_consistency_weight: 1                                                  # if 0, no latent consistency loss is used
   latent_consistency_eta1: 0.5
@@ -27,6 +27,8 @@ optimization:
   dip_type: i
   dip_diag_lambda: 0.05
   dip_offdiag_lambda: 0.1
+
+  factor_weight: 0                                                              # if 0, no factor VAE
 
 model:
   sampling:

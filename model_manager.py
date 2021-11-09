@@ -3,6 +3,7 @@ import pickle
 import torch.nn
 import trimesh
 
+from torch.nn.functional import cross_entropy
 from torchvision.transforms import ToPILImage
 from torchvision.utils import make_grid
 from pytorch3d.structures import Meshes
@@ -23,7 +24,7 @@ from pytorch3d.renderer import (
 import utils
 from mesh_simplification import MeshSimplifier
 from compute_spirals import preprocess_spiral
-from model import Model
+from model import Model, FactorVAEDiscriminator
 
 
 class ModelManager(torch.nn.Module):
@@ -68,6 +69,7 @@ class ModelManager(torch.nn.Module):
         self._w_laplacian_loss = float(
             self._optimization_params['laplacian_weight'])
         self._w_dip_loss = float(self._optimization_params['dip_weight'])
+        self._w_factor_loss = float(self._optimization_params['factor_weight'])
 
         self._rend_device = rendering_device if rendering_device else device
         self._default_shader = HardGouraudShader(
@@ -90,10 +92,18 @@ class ModelManager(torch.nn.Module):
             assert self._swap_features
         if self._w_dip_loss > 0:
             assert self._w_kl_loss > 0
+        if self._w_factor_loss > 0:
+            assert not self._swap_features
+            self._factor_discriminator = FactorVAEDiscriminator(
+                self._model_params['latent_size']).to(device)
+            self._disc_optimizer = torch.optim.Adam(
+                self._factor_discriminator.parameters(),
+                lr=float(self._optimization_params['lr']), betas=(0.5, 0.9),
+                weight_decay=self._optimization_params['weight_decay'])
 
     @property
     def loss_keys(self):
-        return ['reconstruction', 'kl', 'dip',
+        return ['reconstruction', 'kl', 'dip', 'factor',
                 'latent_consistency', 'laplacian', 'tot']
 
     @property
@@ -195,14 +205,19 @@ class ModelManager(torch.nn.Module):
         else:
             self._net.eval()
 
+        if self._w_factor_loss > 0:
+            iteration_function = self._do_factor_vae_iteration
+        else:
+            iteration_function = self._do_iteration
+
         self._reset_losses()
         it = 0
         for it, data in enumerate(data_loader):
             if train:
-                losses = self._do_iteration(data, device, train=True)
+                losses = iteration_function(data, device, train=True)
             else:
                 with torch.no_grad():
-                    losses = self._do_iteration(data, device, train=False)
+                    losses = iteration_function(data, device, train=False)
             self._add_losses(losses)
         self._divide_losses(it + 1)
 
@@ -243,7 +258,56 @@ class ModelManager(torch.nn.Module):
         return {'reconstruction': loss_recon.item(),
                 'kl': loss_kl.item(),
                 'dip': loss_dip.item(),
+                'factor': 0,
                 'latent_consistency': loss_z_cons.item(),
+                'laplacian': loss_laplacian.item(),
+                'tot': loss_tot.item()}
+
+    def _do_factor_vae_iteration(self, data, device='cpu', train=True):
+        # Factor-vae split data into two batches.
+        data = data.to(device)
+        batch_size = data.x.size(dim=0)
+        half_batch_size = batch_size // 2
+        data = data.x.split(half_batch_size)
+        data1 = data[0]
+        data2 = data[1]
+
+        # Factor VAE Loss
+        reconstructed1, z1, mu1, logvar1 = self._net(data1)
+        loss_recon = self._compute_mse_loss(reconstructed1, data1)
+        loss_laplacian = self._compute_laplacian_regularizer(reconstructed1)
+
+        loss_kl = self._compute_kl_divergence_loss(mu1, logvar1)
+
+        disc_z = self._factor_discriminator(z1)
+        factor_loss = (disc_z[:, 0] - disc_z[:, 1]).mean()
+
+        loss_tot = loss_recon + \
+            self._w_kl_loss * loss_kl + \
+            self._w_laplacian_loss * loss_laplacian + \
+            self._w_factor_loss * factor_loss
+
+        if train:
+            self._optimizer.zero_grad()
+            self._disc_optimizer.zero_grad()
+            loss_tot.backward(retain_graph=True)
+
+            _, z2, _, _ = self._net(data2)
+            z2_perm = self._permute_latent_dims(z2).detach()
+            disc_z_perm = self._factor_discriminator(z2_perm)
+            ones = torch.ones(half_batch_size, dtype=torch.long,
+                              device=self.device)
+            zeros = torch.zeros_like(ones)
+            disc_factor_loss = 0.5 * (cross_entropy(disc_z, zeros) +
+                                      cross_entropy(disc_z_perm, ones))
+
+            disc_factor_loss.backward()
+            self._optimizer.step()
+            self._disc_optimizer.step()
+
+        return {'reconstruction': loss_recon.item(),
+                'kl': loss_kl.item(),
+                'factor': factor_loss.item(),
                 'laplacian': loss_laplacian.item(),
                 'tot': loss_tot.item()}
 
@@ -320,6 +384,15 @@ class ModelManager(torch.nn.Module):
         return (1 / (bs ** 3 - bs ** 2)) * \
                (torch.sum(torch.max(zero, lr - dr + eta2)) +
                 torch.sum(torch.max(zero, lg - dg + eta1)))
+
+    @staticmethod
+    def _permute_latent_dims(latent_sample):
+        perm = torch.zeros_like(latent_sample)
+        batch_size, dim_z = perm.size()
+        for z in range(dim_z):
+            pi = torch.randperm(batch_size).to(latent_sample.device)
+            perm[:, z] = latent_sample[pi, z]
+        return perm
 
     def compute_vertex_errors(self, out_verts, gt_verts):
         vertex_errors = self._compute_mse_loss(
@@ -462,4 +535,3 @@ class ShadelessShader(torch.nn.Module):
         pixel_colors = meshes.sample_textures(fragments)
         images = hard_rgb_blend(pixel_colors, fragments, self.blend_params)
         return images
-
