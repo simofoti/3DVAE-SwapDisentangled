@@ -289,7 +289,6 @@ class ModelManager(torch.nn.Module):
 
         if train:
             self._optimizer.zero_grad()
-            self._disc_optimizer.zero_grad()
             loss_tot.backward(retain_graph=True)
 
             _, z2, _, _ = self._net(data2)
@@ -301,13 +300,16 @@ class ModelManager(torch.nn.Module):
             disc_factor_loss = 0.5 * (cross_entropy(disc_z, zeros) +
                                       cross_entropy(disc_z_perm, ones))
 
+            self._disc_optimizer.zero_grad()
             disc_factor_loss.backward()
             self._optimizer.step()
             self._disc_optimizer.step()
 
         return {'reconstruction': loss_recon.item(),
                 'kl': loss_kl.item(),
+                'dip': 0,
                 'factor': factor_loss.item(),
+                'latent_consistency': 0,
                 'laplacian': loss_laplacian.item(),
                 'tot': loss_tot.item()}
 
