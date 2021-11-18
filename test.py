@@ -84,8 +84,8 @@ class Tester:
     def set_rendering_background_color(self, color=None):
         color = [1, 1, 1] if color is None else color
         blend_params = BlendParams(background_color=color)
-        self._manager._default_shader.blend_params = blend_params
-        self._manager._simple_shader.blend_params = blend_params
+        self._manager.default_shader.blend_params = blend_params
+        self._manager.simple_shader.blend_params = blend_params
 
     def compute_latent_stats(self, data_loader):
         storage_path = os.path.join(self._out_dir, 'z_stats.pkl')
@@ -267,7 +267,7 @@ class Tester:
         data_errors = []
         for data in tqdm.tqdm(data_loader):
             if self._config['data']['swap_features']:
-                data.x = data.x[self._manager._batch_diagonal_idx, ::]
+                data.x = data.x[self._manager.batch_diagonal_idx, ::]
             data = data.to(self._device)
             gt = data.x
 
@@ -290,7 +290,7 @@ class Tester:
         mean_distances = []
         for data in tqdm.tqdm(self._train_loader):
             if self._config['data']['swap_features']:
-                x = data.x[self._manager._batch_diagonal_idx, ::]
+                x = data.x[self._manager.batch_diagonal_idx, ::]
             else:
                 x = data.x
 
@@ -326,7 +326,7 @@ class Tester:
             mean_distances = []
             for data in self._train_loader:
                 if self._config['data']['swap_features']:
-                    x = data.x[self._manager._batch_diagonal_idx, ::]
+                    x = data.x[self._manager.batch_diagonal_idx, ::]
                 else:
                     x = data.x
 
@@ -346,7 +346,7 @@ class Tester:
         all_ref = []
         for data in tqdm.tqdm(data_loader):
             if self._config['data']['swap_features']:
-                data.x = data.x[self._manager._batch_diagonal_idx, ::]
+                data.x = data.x[self._manager.batch_diagonal_idx, ::]
             data = data.to(self._device)
             if self._normalized_data:
                 data.x = self._unnormalize_verts(data.x)
@@ -392,7 +392,7 @@ class Tester:
             assert v_batch.shape[0] >= 2
             v_batch = v_batch.to(self._device)
             if self._config['data']['swap_features']:
-                v_batch = v_batch[self._manager._batch_diagonal_idx, ::]
+                v_batch = v_batch[self._manager.batch_diagonal_idx, ::]
             v_batch = v_batch[:2, ::]
 
         z = self._manager.encode(v_batch)
@@ -453,7 +453,7 @@ class Tester:
                 gen_verts = self._unnormalize_verts(gen_verts)
 
             if i < iterations // 3:
-                er = self._manager._compute_mse_loss(
+                er = self._manager.compute_mse_loss(
                     gen_verts[:, self.uhm_landmarks, :], target_landmarks)
             else:
                 er, _ = pytorch3d.loss.chamfer_distance(gen_verts, target_verts)
@@ -606,7 +606,7 @@ class Tester:
             if self._normalized_data:
                 gen_verts = self._unnormalize_verts(gen_verts)
 
-            loss = self._manager._compute_mse_loss(
+            loss = self._manager.compute_mse_loss(
                 gen_verts[:, indices, :], new_coords)
             loss.backward()
 
@@ -657,7 +657,7 @@ class Tester:
                 v_1 = mesh_verts
             else:
                 distances.append(
-                    self._manager._compute_mse_loss(v_1, mesh_verts).item())
+                    self._manager.compute_mse_loss(v_1, mesh_verts).item())
 
         m_2_path = os.path.join(
             meshes_root, test_list[np.asarray(distances).argmax()] + '.ply')
@@ -777,9 +777,9 @@ if __name__ == '__main__':
     tester = Tester(manager, normalization_dict, train_loader, test_loader,
                     output_directory, configurations)
 
-    tester()
+    # tester()
     # tester.direct_manipulation()
-    # tester.fit_coma_data_different_noises()
+    tester.fit_coma_data_different_noises()
     # tester.set_renderings_size(512)
     # tester.set_rendering_background_color()
     # tester.interpolate()

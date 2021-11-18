@@ -72,10 +72,10 @@ class ModelManager(torch.nn.Module):
         self._w_factor_loss = float(self._optimization_params['factor_weight'])
 
         self._rend_device = rendering_device if rendering_device else device
-        self._default_shader = HardGouraudShader(
+        self.default_shader = HardGouraudShader(
             cameras=FoVPerspectiveCameras(),
             blend_params=BlendParams(background_color=[0, 0, 0]))
-        self._simple_shader = ShadelessShader(
+        self.simple_shader = ShadelessShader(
             blend_params=BlendParams(background_color=[0, 0, 0]))
         self.renderer = self._create_renderer()
 
@@ -117,6 +117,10 @@ class ModelManager(torch.nn.Module):
     @property
     def model_latent_size(self):
         return self._model_params['latent_size']
+
+    @property
+    def batch_diagonal_idx(self):
+        return self._batch_diagonal_idx
 
     def _precompute_transformations(self):
         storage_path = os.path.join(self._precomputed_storage_path,
@@ -227,7 +231,7 @@ class ModelManager(torch.nn.Module):
 
         data = data.to(device)
         reconstructed, z, mu, logvar = self.forward(data)
-        loss_recon = self._compute_mse_loss(reconstructed, data.x)
+        loss_recon = self.compute_mse_loss(reconstructed, data.x)
         loss_laplacian = self._compute_laplacian_regularizer(reconstructed)
 
         if self._w_kl_loss > 0:
@@ -274,7 +278,7 @@ class ModelManager(torch.nn.Module):
 
         # Factor VAE Loss
         reconstructed1, z1, mu1, logvar1 = self._net(data1)
-        loss_recon = self._compute_mse_loss(reconstructed1, data1)
+        loss_recon = self.compute_mse_loss(reconstructed1, data1)
         loss_laplacian = self._compute_laplacian_regularizer(reconstructed1)
 
         loss_kl = self._compute_kl_divergence_loss(mu1, logvar1)
@@ -318,7 +322,7 @@ class ModelManager(torch.nn.Module):
         return torch.nn.L1Loss(reduction=reduction)(prediction, gt)
 
     @staticmethod
-    def _compute_mse_loss(prediction, gt, reduction='mean'):
+    def compute_mse_loss(prediction, gt, reduction='mean'):
         return torch.nn.MSELoss(reduction=reduction)(prediction, gt)
 
     def _compute_laplacian_regularizer(self, prediction):
@@ -397,7 +401,7 @@ class ModelManager(torch.nn.Module):
         return perm
 
     def compute_vertex_errors(self, out_verts, gt_verts):
-        vertex_errors = self._compute_mse_loss(
+        vertex_errors = self.compute_mse_loss(
             out_verts, gt_verts, reduction='none')
         vertex_errors = torch.sqrt(torch.sum(vertex_errors, dim=-1))
         vertex_errors *= self.to_mm_const
@@ -449,7 +453,7 @@ class ModelManager(torch.nn.Module):
         renderer = MeshRenderer(
             rasterizer=MeshRasterizer(raster_settings=raster_settings,
                                       cameras=FoVPerspectiveCameras()),
-            shader=self._default_shader)
+            shader=self.default_shader)
         renderer.to(self._rend_device)
         return renderer
 
@@ -460,12 +464,12 @@ class ModelManager(torch.nn.Module):
         template = self.template.to(self._rend_device)
 
         if vertex_errors is not None:
-            self.renderer.shader = self._simple_shader
+            self.renderer.shader = self.simple_shader
             textures = TexturesVertex(utils.errors_to_colors(
                 vertex_errors, min_value=0,
                 max_value=error_max_scale, cmap='plasma') / 255)
         else:
-            self.renderer.shader = self._default_shader
+            self.renderer.shader = self.default_shader
             textures = TexturesVertex(torch.ones_like(batched_verts) * 0.5)
 
         meshes = Meshes(

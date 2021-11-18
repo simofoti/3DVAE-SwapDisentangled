@@ -1,6 +1,6 @@
 data:
   template_path: UHM_models/mean_nme_fcolor_b.ply                               # vertices should be coloured (vertex semantic segmentation)
-  precomputed_path: precomputed_cvpr
+  precomputed_path: precomputed
   dataset_type: faces
   pca_path: UHM_models/head_model_global_align_no_mouth_and_eyes.pkl            # to be used if data are generated with UHM
   dataset_path: vertices_of_faces_from_UHM
