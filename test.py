@@ -51,13 +51,15 @@ class Tester:
         # Qualitative evaluations
         if self._config['data']['swap_features']:
             self.latent_swapping(next(iter(self._test_loader)).x)
-        self.per_variable_range_experiments()
+        self.per_variable_range_experiments(use_z_stats=False)
         self.random_generation_and_rendering(n_samples=16)
         self.random_generation_and_save(n_samples=16)
-        self.direct_manipulation()
         self.interpolate()
+        if self._config['data']['dataset_type'] == 'faces':
+            self.direct_manipulation()
 
         # Quantitative evaluation
+        self.evaluate_gen(self._test_loader, n_sampled_points=2048)
         recon_errors = self.reconstruction_errors(self._test_loader)
         train_set_diversity = self.compute_diversity_train_set()
         diversity = self.compute_diversity()
@@ -535,6 +537,8 @@ class Tester:
         for n in noises:
             dataframes.append(self.fit_coma_data(base_dir, n, True))
         df = pd.concat(dataframes)
+        df.to_pickle(os.path.join(self._out_dir, 'coma_fitting.pkl'))
+
         sns.set_theme(style="ticks")
         plt.figure()
         sns.lineplot(data=df, x='noise', y='errors',
@@ -666,16 +670,43 @@ class Tester:
         z_1 = self._manager.encode(v_1.unsqueeze(0).to(self._device))
         z_2 = self._manager.encode(v_2.unsqueeze(0).to(self._device))
 
-        # Interpolate per feature
         features = list(self._manager.template.feat_and_cont.keys())
-        z = z_1.repeat(len(features) // 2, 1)
-        all_frames, rows = [], []
-        for feature in features:
-            zf_idxs = self._manager.latent_regions[feature]
-            z_1f = z_1[:, zf_idxs[0]:zf_idxs[1]]
-            z_2f = z_2[:, zf_idxs[0]:zf_idxs[1]]
-            z[:, zf_idxs[0]:zf_idxs[1]] = self.vector_linspace(
-                z_1f, z_2f, len(features) // 2).to(self._device)
+
+        # Interpolate per feature
+        if self._config['data']['swap_features']:
+            z = z_1.repeat(len(features) // 2, 1)
+            all_frames, rows = [], []
+            for feature in features:
+                zf_idxs = self._manager.latent_regions[feature]
+                z_1f = z_1[:, zf_idxs[0]:zf_idxs[1]]
+                z_2f = z_2[:, zf_idxs[0]:zf_idxs[1]]
+                z[:, zf_idxs[0]:zf_idxs[1]] = self.vector_linspace(
+                    z_1f, z_2f, len(features) // 2).to(self._device)
+
+                gen_verts = self._manager.generate(z.to(self._device))
+                if self._normalized_data:
+                    gen_verts = self._unnormalize_verts(gen_verts)
+
+                renderings = self._manager.render(gen_verts).cpu()
+                all_frames.append(renderings)
+                rows.append(make_grid(renderings, padding=10,
+                            pad_value=1, nrow=len(features)))
+                z = z[-1, :].repeat(len(features) // 2, 1)
+
+            save_image(
+                torch.cat(rows, dim=-2),
+                os.path.join(self._out_dir, 'interpolate_per_feature.png'))
+            write_video(
+                os.path.join(self._out_dir, 'interpolate_per_feature.mp4'),
+                torch.cat(all_frames, dim=0).permute(0, 2, 3, 1) * 255, fps=4)
+
+        # Interpolate per variable
+        z = z_1.repeat(3, 1)
+        all_frames = []
+        for z_i in range(self._manager.model_latent_size):
+            z_1f = z_1[:, z_i]
+            z_2f = z_2[:, z_i]
+            z[:, z_i] = self.vector_linspace(z_1f, z_2f, 3).to(self._device)
 
             gen_verts = self._manager.generate(z.to(self._device))
             if self._normalized_data:
@@ -683,14 +714,10 @@ class Tester:
 
             renderings = self._manager.render(gen_verts).cpu()
             all_frames.append(renderings)
-            rows.append(make_grid(renderings, padding=10,
-                        pad_value=1, nrow=len(features)))
-            z = z[-1, :].repeat(len(features) // 2, 1)
+            z = z[-1, :].repeat(3, 1)
 
-        save_image(torch.cat(rows, dim=-2),
-                   os.path.join(self._out_dir, 'interpolate_per_feature.png'))
         write_video(
-            os.path.join(self._out_dir, 'interpolate_per_feature.mp4'),
+            os.path.join(self._out_dir, 'interpolate_per_variable.mp4'),
             torch.cat(all_frames, dim=0).permute(0, 2, 3, 1) * 255, fps=4)
 
         # Interpolate all features
@@ -764,3 +791,4 @@ if __name__ == '__main__':
     # print(tester.compute_specificity(train_loader, 100))
     # print(tester.compute_diversity_train_set())
     # print(tester.compute_diversity())
+    # tester.evaluate_gen(test_loader, n_sampled_points=2048)
