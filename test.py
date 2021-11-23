@@ -706,7 +706,8 @@ class Tester:
         for z_i in range(self._manager.model_latent_size):
             z_1f = z_1[:, z_i]
             z_2f = z_2[:, z_i]
-            z[:, z_i] = self.vector_linspace(z_1f, z_2f, 3).to(self._device)
+            z[:, z_i] = torch.linspace(z_1f.item(),
+                                       z_2f.item(), 3).to(self._device)
 
             gen_verts = self._manager.generate(z.to(self._device))
             if self._normalized_data:
@@ -777,9 +778,9 @@ if __name__ == '__main__':
     tester = Tester(manager, normalization_dict, train_loader, test_loader,
                     output_directory, configurations)
 
-    # tester()
+    tester()
     # tester.direct_manipulation()
-    tester.fit_coma_data_different_noises()
+    # tester.fit_coma_data_different_noises()
     # tester.set_renderings_size(512)
     # tester.set_rendering_background_color()
     # tester.interpolate()
