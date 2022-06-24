@@ -1,4 +1,5 @@
 # 3D Shape Variational Autoencoder Latent Disentanglement via Mini-Batch Feature Swapping for Bodies and Faces
+[[arxiv]](https://arxiv.org/pdf/2111.12448.pdf) [[CVF]](https://openaccess.thecvf.com/content/CVPR2022/papers/Foti_3D_Shape_Variational_Autoencoder_Latent_Disentanglement_via_Mini-Batch_Feature_Swapping_CVPR_2022_paper.pdf) 
 
 ## Installation
 
