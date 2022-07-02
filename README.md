@@ -62,9 +62,30 @@ python test.py --id=<NAME_OF_YOUR_EXPERIMENT>
 Note that NAME_OF_YOUR_EXPERIMENT is also the name of the folder containing the
 pretrained model.
 
+
 ## Additional Notes
+
 We make available the files storing:
  - the precomputed down- and up-sampling transformation
  - the precomputed spirals
  - the mesh template with the face regions
  - the network weights
+
+
+
+## Video Of Oral Presentation @CVPR2022
+
+[![Watch the video summary of our paper!](https://img.youtube.com/vi/C9d00_Ct4KI/0.jpg)](https://www.youtube.com/watch?v=C9d00_Ct4KI "CVPR2022-oral: 3D VAE Latent Disentanglementvia Mini-Batch Feature Swapping")
+
+
+## Cite This Work
+
+```
+@inproceedings{foti20223d,
+  title={3D Shape Variational Autoencoder Latent Disentanglement via Mini-Batch Feature Swapping for Bodies and Faces},
+  author={Foti, Simone and Koo, Bongjin and Stoyanov, Danail and Clarkson, Matthew J},
+  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+  pages={18730--18739},
+  year={2022}
+}
+```
